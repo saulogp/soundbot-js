@@ -131,7 +131,6 @@ function playAudio(guildId, filePath) {
       console.error(`Erro no AudioPlayer [${guildId}]:`, err.message);
     });
     players.set(guildId, player);
-    console.log('passei aqui' + guildId)
     conn.subscribe(player);
   }
 

@@ -11,9 +11,18 @@ yarn-error.log*
 .env
 .env.local
 
+# Config (pode conter token Discord)
+config.json
+
 # Build output
 dist/
 build/
 
 # OS-specific files
 .DS_Store
+
+# Temp uploads
+.tmp-uploads/
+
+#folders
+audios
