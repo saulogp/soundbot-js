@@ -75,6 +75,19 @@ document.addEventListener('DOMContentLoaded', () => {
       if (e.target === overlay) overlay.style.display = 'none';
     });
   });
+
+  // Close modal buttons (data-close attribute)
+  document.querySelectorAll('[data-close]').forEach(btn => {
+    btn.addEventListener('click', () => closeModal(btn.dataset.close));
+  });
+
+  // Empty state "add first audio" button
+  document.getElementById('btnAddFirstAudio').addEventListener('click', () => {
+    document.getElementById('btnAddAudio').click();
+  });
+
+  // Clear file button
+  document.getElementById('btnClearFile').addEventListener('click', clearFile);
 });
 
 // ===== API Calls =====

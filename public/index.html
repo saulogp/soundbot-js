@@ -73,7 +73,7 @@
       <div class="empty-state" id="emptyState" style="display:none;">
         <div class="empty-icon">&#9835;</div>
         <p>Nenhum áudio nesta categoria</p>
-        <button class="btn btn-primary" onclick="document.getElementById('btnAddAudio').click()">
+        <button class="btn btn-primary" id="btnAddFirstAudio">
           Adicionar primeiro áudio
         </button>
       </div>
@@ -85,7 +85,7 @@
     <div class="modal">
       <div class="modal-header">
         <h2>Alterar Diretório</h2>
-        <button class="modal-close" onclick="closeModal('modalDirectory')">&times;</button>
+        <button class="modal-close" data-close="modalDirectory">&times;</button>
       </div>
       <div class="modal-body">
         <p class="modal-hint">Informe o caminho completo da pasta onde os áudios serão armazenados.</p>
@@ -96,7 +96,7 @@
         <p class="current-dir">Diretório atual: <code id="currentDir">-</code></p>
       </div>
       <div class="modal-footer">
-        <button class="btn btn-ghost" onclick="closeModal('modalDirectory')">Cancelar</button>
+        <button class="btn btn-ghost" data-close="modalDirectory">Cancelar</button>
         <button class="btn btn-primary" id="btnSaveDirectory">Salvar</button>
       </div>
     </div>
@@ -107,7 +107,7 @@
     <div class="modal">
       <div class="modal-header">
         <h2>Adicionar Áudio</h2>
-        <button class="modal-close" onclick="closeModal('modalAddAudio')">&times;</button>
+        <button class="modal-close" data-close="modalAddAudio">&times;</button>
       </div>
       <div class="modal-body">
         <div class="input-group">
@@ -129,11 +129,11 @@
         </div>
         <div class="selected-file" id="selectedFile" style="display:none;">
           <span id="selectedFileName"></span>
-          <button class="btn-icon" onclick="clearFile()">&times;</button>
+          <button class="btn-icon" id="btnClearFile">&times;</button>
         </div>
       </div>
       <div class="modal-footer">
-        <button class="btn btn-ghost" onclick="closeModal('modalAddAudio')">Cancelar</button>
+        <button class="btn btn-ghost" data-close="modalAddAudio">Cancelar</button>
         <button class="btn btn-primary" id="btnUpload" disabled>Enviar</button>
       </div>
     </div>
@@ -144,7 +144,7 @@
     <div class="modal">
       <div class="modal-header">
         <h2>Editar Áudio</h2>
-        <button class="modal-close" onclick="closeModal('modalEditAudio')">&times;</button>
+        <button class="modal-close" data-close="modalEditAudio">&times;</button>
       </div>
       <div class="modal-body">
         <p class="edit-audio-name" id="editAudioName"></p>
@@ -166,7 +166,7 @@
         </div>
       </div>
       <div class="modal-footer">
-        <button class="btn btn-ghost" onclick="closeModal('modalEditAudio')">Cancelar</button>
+        <button class="btn btn-ghost" data-close="modalEditAudio">Cancelar</button>
         <button class="btn btn-primary" id="btnSaveThumb" disabled>Salvar</button>
       </div>
     </div>
@@ -177,7 +177,7 @@
     <div class="modal">
       <div class="modal-header">
         <h2>Discord Bot</h2>
-        <button class="modal-close" onclick="closeModal('modalDiscord')">&times;</button>
+        <button class="modal-close" data-close="modalDiscord">&times;</button>
       </div>
       <div class="modal-body">
         <div class="discord-status-box" id="discordStatusBox">
