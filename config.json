@@ -1,0 +1,11 @@
+{
+  "audioDir": "C:\\src\\soundbot\\audios",
+  "categories": [
+    "Geral"
+  ],
+  "discord": {
+    "token": "",
+    "defaultGuildId": "",
+    "defaultChannelId": ""
+  }
+}
