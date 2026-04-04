@@ -172,7 +172,7 @@ function renderAudioGrid(audios) {
         <button class="card-action-btn delete" title="Remover">&times;</button>
       </div>
       ${iconHtml}
-      <div class="card-name">${escapeHtml(audio.name)}</div>
+      <div class="card-name">${escapeHtml(audio.display || audio.name)}</div>
     `;
 
     card.addEventListener('click', e => {
@@ -409,6 +409,10 @@ function openEditModal(audio) {
   editingAudio = audio;
   document.getElementById('editAudioName').textContent = audio.name;
 
+  // Display name
+  const displayInput = document.getElementById('inputDisplayName');
+  displayInput.value = audio.display || '';
+
   const thumbImg = document.getElementById('thumbImg');
   const thumbPlaceholder = document.getElementById('thumbPlaceholder');
   if (audio.thumbnail) {
@@ -421,7 +425,7 @@ function openEditModal(audio) {
   }
 
   document.getElementById('inputThumbFile').value = '';
-  document.getElementById('btnSaveThumb').disabled = true;
+  document.getElementById('btnSaveThumb').disabled = false;
   openModal('modalEditAudio');
 }
 
@@ -446,28 +450,39 @@ function initEditModal() {
     document.getElementById('btnSaveThumb').disabled = false;
   });
 
-  document.getElementById('btnSaveThumb').addEventListener('click', saveThumb);
+  document.getElementById('btnSaveThumb').addEventListener('click', saveEdit);
 }
 
-async function saveThumb() {
+async function saveEdit() {
   if (!editingAudio) return;
-  const file = document.getElementById('inputThumbFile').files[0];
-  if (!file) return;
-
-  const formData = new FormData();
-  formData.append('thumbnail', file);
-  formData.append('category', editingAudio.category);
-  formData.append('filename', editingAudio.filename);
 
   document.getElementById('btnSaveThumb').disabled = true;
   document.getElementById('btnSaveThumb').textContent = 'Salvando...';
 
-  const res = await fetch('/api/audios/thumbnail', { method: 'PUT', body: formData });
+  // Save display name
+  const displayName = document.getElementById('inputDisplayName').value;
+  await fetch('/api/audios/display', {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      category: editingAudio.category,
+      filename: editingAudio.filename,
+      display: displayName
+    })
+  });
 
-  if (res.ok) {
-    closeModal('modalEditAudio');
-    loadAudios(currentCategory);
+  // Save thumbnail if a new file was selected
+  const file = document.getElementById('inputThumbFile').files[0];
+  if (file) {
+    const formData = new FormData();
+    formData.append('thumbnail', file);
+    formData.append('category', editingAudio.category);
+    formData.append('filename', editingAudio.filename);
+    await fetch('/api/audios/thumbnail', { method: 'PUT', body: formData });
   }
+
+  closeModal('modalEditAudio');
+  loadAudios(currentCategory);
 
   document.getElementById('btnSaveThumb').textContent = 'Salvar';
   document.getElementById('btnSaveThumb').disabled = false;

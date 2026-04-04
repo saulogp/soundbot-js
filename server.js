@@ -73,14 +73,21 @@ const thumbUpload = multer({
   }
 });
 
-// Metadata helpers — stores thumbnail mappings per category
+// Metadata helpers — stores thumbnail and display-name mappings per category
 function getMetadataPath(audioDir, category) {
   return path.join(audioDir, category, '.metadata.json');
 }
 
 function loadMetadata(audioDir, category) {
   try {
-    return JSON.parse(fs.readFileSync(getMetadataPath(audioDir, category), 'utf-8'));
+    const raw = JSON.parse(fs.readFileSync(getMetadataPath(audioDir, category), 'utf-8'));
+    // Normalize old format (string values) to new object format
+    for (const key of Object.keys(raw)) {
+      if (typeof raw[key] === 'string') {
+        raw[key] = { thumbnail: raw[key] };
+      }
+    }
+    return raw;
   } catch {
     return {};
   }
@@ -169,13 +176,17 @@ app.get('/api/audios', (req, res) => {
         const catDir = path.join(audioDir, entry.name);
         const files = fs.readdirSync(catDir)
           .filter(f => allowedExt.includes(path.extname(f).toLowerCase()))
-          .map(f => ({
-            name: path.basename(f, path.extname(f)),
-            filename: f,
-            category: entry.name,
-            url: `/audio-files/${encodeURIComponent(entry.name)}/${encodeURIComponent(f)}`,
-            thumbnail: meta[f] ? `/audio-files/${encodeURIComponent(entry.name)}/${encodeURIComponent(meta[f])}` : null
-          }));
+          .map(f => {
+            const m = meta[f] || {};
+            return {
+              name: path.basename(f, path.extname(f)),
+              display: m.display || null,
+              filename: f,
+              category: entry.name,
+              url: `/audio-files/${encodeURIComponent(entry.name)}/${encodeURIComponent(f)}`,
+              thumbnail: m.thumbnail ? `/audio-files/${encodeURIComponent(entry.name)}/${encodeURIComponent(m.thumbnail)}` : null
+            };
+          });
         allFiles.push(...files);
       }
       res.json(allFiles);
@@ -185,13 +196,17 @@ app.get('/api/audios', (req, res) => {
       const meta = loadMetadata(audioDir, category);
       const files = fs.readdirSync(dir)
         .filter(f => allowedExt.includes(path.extname(f).toLowerCase()))
-        .map(f => ({
-          name: path.basename(f, path.extname(f)),
-          filename: f,
-          category,
-          url: `/audio-files/${encodeURIComponent(category)}/${encodeURIComponent(f)}`,
-          thumbnail: meta[f] ? `/audio-files/${encodeURIComponent(category)}/${encodeURIComponent(meta[f])}` : null
-        }));
+        .map(f => {
+          const m = meta[f] || {};
+          return {
+            name: path.basename(f, path.extname(f)),
+            display: m.display || null,
+            filename: f,
+            category,
+            url: `/audio-files/${encodeURIComponent(category)}/${encodeURIComponent(f)}`,
+            thumbnail: m.thumbnail ? `/audio-files/${encodeURIComponent(category)}/${encodeURIComponent(m.thumbnail)}` : null
+          };
+        });
       res.json(files);
     }
   } catch {
@@ -234,8 +249,9 @@ app.put('/api/audios/thumbnail', thumbUpload.single('thumbnail'), (req, res) => 
 
   // Remove old thumbnail if exists
   const meta = loadMetadata(config.audioDir, category);
-  if (meta[filename]) {
-    const oldPath = path.join(destDir, meta[filename]);
+  const entry = meta[filename] || {};
+  if (entry.thumbnail) {
+    const oldPath = path.join(destDir, entry.thumbnail);
     try { fs.unlinkSync(oldPath); } catch {}
   }
 
@@ -245,12 +261,33 @@ app.put('/api/audios/thumbnail', thumbUpload.single('thumbnail'), (req, res) => 
   fs.renameSync(req.file.path, destPath);
 
   // Save metadata
-  meta[filename] = thumbName;
+  meta[filename] = { ...entry, thumbnail: thumbName };
   saveMetadata(config.audioDir, category, meta);
 
   res.json({
     thumbnail: `/audio-files/${encodeURIComponent(category)}/${encodeURIComponent(thumbName)}`
   });
+});
+
+// PUT /api/audios/display — update display name for an audio
+app.put('/api/audios/display', (req, res) => {
+  const { category, filename, display } = req.body;
+  if (!category || !filename) return res.status(400).json({ error: 'Categoria e arquivo são obrigatórios' });
+
+  const config = loadConfig();
+  const meta = loadMetadata(config.audioDir, category);
+  const entry = meta[filename] || {};
+
+  if (display && display.trim()) {
+    entry.display = display.trim();
+  } else {
+    delete entry.display;
+  }
+
+  meta[filename] = entry;
+  saveMetadata(config.audioDir, category, meta);
+
+  res.json({ display: entry.display || null });
 });
 
 // DELETE /api/audios
