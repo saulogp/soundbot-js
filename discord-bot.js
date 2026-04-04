@@ -65,6 +65,35 @@ function getStatus() {
   };
 }
 
+function getUserVoiceChannel(guildId, userId) {
+  if (!client || !client.isReady()) return null;
+  const guild = client.guilds.cache.get(guildId);
+  if (!guild) return null;
+  const voiceState = guild.voiceStates.cache.get(userId);
+  return voiceState?.channelId || null;
+}
+
+function getStatusForUser(userGuildIds, userId) {
+  const status = getStatus();
+  if (!status.online) return status;
+
+  status.guilds = status.guilds
+    .filter(g => userGuildIds.has(g.id))
+    .map(g => {
+      const userChannelId = getUserVoiceChannel(g.id, userId);
+      return {
+        ...g,
+        voiceChannels: g.voiceChannels.map(ch => ({
+          ...ch,
+          userPresent: ch.id === userChannelId
+        })),
+        userChannelId
+      };
+    });
+
+  return status;
+}
+
 function joinChannel(guildId, channelId) {
   if (!client || !client.isReady()) {
     throw new Error('Bot não está conectado');
@@ -165,4 +194,4 @@ function isReady() {
   return client && client.isReady();
 }
 
-module.exports = { init, getStatus, joinChannel, leaveChannel, playAudio, stopAudio, destroy, isReady };
+module.exports = { init, getStatus, getStatusForUser, joinChannel, leaveChannel, playAudio, stopAudio, destroy, isReady };

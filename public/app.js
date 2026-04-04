@@ -20,8 +20,53 @@ const $toastTime = document.getElementById('toastTime');
 const $toastBar = document.getElementById('toastProgressBar');
 const $toastTrack = document.getElementById('toastProgressTrack');
 
+// ===== Auth =====
+async function checkAuth() {
+  try {
+    const res = await fetch('/auth/me');
+    if (res.status === 401) {
+      document.getElementById('loginScreen').style.display = '';
+      document.querySelector('.app').style.display = 'none';
+      return false;
+    }
+    const data = await res.json();
+    window.currentUser = data.user;
+
+    // Show app, hide login
+    document.getElementById('loginScreen').style.display = 'none';
+    document.querySelector('.app').style.display = '';
+
+    // Update user display
+    const userInfo = document.getElementById('userInfo');
+    const avatar = document.getElementById('userAvatar');
+    const userName = document.getElementById('userName');
+    if (data.user.avatar) {
+      avatar.src = `https://cdn.discordapp.com/avatars/${data.user.id}/${data.user.avatar}.png?size=32`;
+    } else {
+      avatar.src = `https://cdn.discordapp.com/embed/avatars/${(BigInt(data.user.id) >> 22n) % 6n}.png`;
+    }
+    userName.textContent = data.user.username;
+    userInfo.style.display = 'flex';
+
+    document.getElementById('btnLogout').addEventListener('click', async () => {
+      await fetch('/auth/logout', { method: 'POST' });
+      window.location.reload();
+    });
+
+    return true;
+  } catch {
+    document.getElementById('loginScreen').style.display = '';
+    document.querySelector('.app').style.display = 'none';
+    return false;
+  }
+}
+
 // ===== Init =====
-document.addEventListener('DOMContentLoaded', () => {
+document.addEventListener('DOMContentLoaded', async () => {
+  // Check auth before anything else
+  const authed = await checkAuth();
+  if (!authed) return;
+
   audioPlayer = $player;
   audioPlayer.addEventListener('ended', () => stopPlaying());
   audioPlayer.addEventListener('timeupdate', updateToastProgress);
@@ -590,6 +635,7 @@ function closeModal(id) {
 async function loadDiscordStatus() {
   try {
     const res = await fetch('/api/discord/status');
+    if (res.status === 401) return;
     discordStatus = await res.json();
     renderDiscordIndicator();
     renderDiscordModal();
@@ -656,44 +702,18 @@ function populateVoiceChannels() {
     guild.voiceChannels.forEach(ch => {
       const opt = document.createElement('option');
       opt.value = ch.id;
-      opt.textContent = ch.name;
-      if (guild.connected && guild.channelId === ch.id) opt.selected = true;
+      opt.textContent = ch.userPresent ? `${ch.name} (você está aqui)` : ch.name;
+      if (guild.connected && guild.channelId === ch.id) {
+        opt.selected = true;
+      } else if (ch.userPresent) {
+        opt.selected = true;
+      }
       channelSelect.appendChild(opt);
     });
   }
 }
 
 function initDiscordModal() {
-  document.getElementById('btnConnectDiscord').addEventListener('click', async () => {
-    const token = document.getElementById('inputDiscordToken').value.trim();
-    if (!token) return;
-
-    const btn = document.getElementById('btnConnectDiscord');
-    btn.disabled = true;
-    btn.textContent = 'Conectando...';
-
-    try {
-      const res = await fetch('/api/discord/token', {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ token })
-      });
-      const data = await res.json();
-      if (res.ok) {
-        discordStatus = data.status;
-        renderDiscordIndicator();
-        renderDiscordModal();
-      } else {
-        alert(data.error || 'Erro ao conectar');
-      }
-    } catch (err) {
-      alert('Erro de conexão');
-    }
-
-    btn.textContent = 'Conectar';
-    btn.disabled = false;
-  });
-
   document.getElementById('selectGuild').addEventListener('change', populateVoiceChannels);
 
   document.getElementById('btnJoinChannel').addEventListener('click', async () => {

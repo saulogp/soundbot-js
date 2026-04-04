@@ -1,4 +1,6 @@
 const express = require('express');
+const session = require('express-session');
+const crypto = require('crypto');
 const multer = require('multer');
 const path = require('path');
 const fs = require('fs');
@@ -19,7 +21,7 @@ function loadConfig() {
     const defaults = {
       audioDir: path.join(__dirname, 'audios'),
       categories: ['Geral'],
-      discord: { token: '', defaultGuildId: '', defaultChannelId: '' }
+      discord: { token: '', clientId: '', clientSecret: '', redirectUri: 'http://localhost:3000/auth/discord/callback', defaultGuildId: '', defaultChannelId: '' }
     };
     fs.writeFileSync(CONFIG_PATH, JSON.stringify(defaults, null, 2));
     return defaults;
@@ -97,7 +99,103 @@ function saveMetadata(audioDir, category, meta) {
   fs.writeFileSync(getMetadataPath(audioDir, category), JSON.stringify(meta, null, 2));
 }
 
+// Validate that a resolved path stays inside the base directory (prevents path traversal)
+function safePath(base, ...segments) {
+  const resolved = path.resolve(base, ...segments);
+  const normalizedBase = path.resolve(base) + path.sep;
+  if (resolved !== path.resolve(base) && !resolved.startsWith(normalizedBase)) {
+    return null;
+  }
+  return resolved;
+}
+
 app.use(express.json());
+app.use(session({
+  secret: crypto.randomBytes(32).toString('hex'),
+  resave: false,
+  saveUninitialized: false,
+  cookie: { secure: false, maxAge: 7 * 24 * 60 * 60 * 1000 }
+}));
+
+// ===== Discord OAuth2 Auth =====
+
+function requireAuth(req, res, next) {
+  if (!req.session?.user) return res.status(401).json({ error: 'Autenticação necessária' });
+  next();
+}
+
+app.get('/auth/discord', (_req, res) => {
+  const config = loadConfig();
+  const { clientId, redirectUri } = config.discord || {};
+  if (!clientId) return res.status(500).json({ error: 'clientId não configurado' });
+
+  const params = new URLSearchParams({
+    client_id: clientId,
+    redirect_uri: redirectUri || 'http://localhost:3000/auth/discord/callback',
+    response_type: 'code',
+    scope: 'identify guilds'
+  });
+  res.redirect(`https://discord.com/oauth2/authorize?${params}`);
+});
+
+app.get('/auth/discord/callback', async (req, res) => {
+  const code = req.query.code;
+  if (!code) return res.redirect('/');
+
+  const config = loadConfig();
+  const { clientId, clientSecret, redirectUri } = config.discord || {};
+
+  try {
+    // Exchange code for access token
+    const tokenRes = await fetch('https://discord.com/api/oauth2/token', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({
+        client_id: clientId,
+        client_secret: clientSecret,
+        grant_type: 'authorization_code',
+        code,
+        redirect_uri: redirectUri || 'http://localhost:3000/auth/discord/callback'
+      })
+    });
+    const tokenData = await tokenRes.json();
+    if (!tokenData.access_token) return res.redirect('/');
+
+    const accessToken = tokenData.access_token;
+
+    // Fetch user info
+    const userRes = await fetch('https://discord.com/api/users/@me', {
+      headers: { Authorization: `Bearer ${accessToken}` }
+    });
+    const user = await userRes.json();
+
+    // Fetch user guilds
+    const guildsRes = await fetch('https://discord.com/api/users/@me/guilds', {
+      headers: { Authorization: `Bearer ${accessToken}` }
+    });
+    const guilds = await guildsRes.json();
+
+    req.session.user = { id: user.id, username: user.username, avatar: user.avatar };
+    req.session.guilds = Array.isArray(guilds) ? guilds.map(g => ({ id: g.id, name: g.name })) : [];
+
+    res.redirect('/');
+  } catch (err) {
+    console.error('Erro no OAuth2 callback:', err.message);
+    res.redirect('/');
+  }
+});
+
+app.get('/auth/me', (req, res) => {
+  if (!req.session?.user) return res.status(401).json({ error: 'Não autenticado' });
+  res.json({ user: req.session.user, guilds: req.session.guilds || [] });
+});
+
+app.post('/auth/logout', (req, res) => {
+  req.session.destroy(() => {
+    res.json({ ok: true });
+  });
+});
+
 app.use(express.static('public'));
 
 // Serve audio files from the configured directory
@@ -106,18 +204,21 @@ app.use('/audio-files', (req, res, next) => {
   express.static(config.audioDir)(req, res, next);
 });
 
-// GET /api/config
-app.get('/api/config', (_req, res) => {
-  res.json(loadConfig());
+// GET /api/config — never expose secrets to the frontend
+app.get('/api/config', requireAuth, (_req, res) => {
+  const config = loadConfig();
+  const { token, clientSecret, ...safeDiscord } = config.discord || {};
+  res.json({ ...config, discord: safeDiscord });
 });
 
 // PUT /api/config/directory
-app.put('/api/config/directory', (req, res) => {
+app.put('/api/config/directory', requireAuth, (req, res) => {
   const { directory } = req.body;
   if (!directory) return res.status(400).json({ error: 'Diretório não informado' });
 
-  // Resolve relative paths
+  // Only allow absolute paths — reject relative traversal
   const resolved = path.resolve(directory);
+  if (!path.isAbsolute(directory)) return res.status(400).json({ error: 'Informe um caminho absoluto' });
   fs.mkdirSync(resolved, { recursive: true });
 
   const config = loadConfig();
@@ -127,7 +228,7 @@ app.put('/api/config/directory', (req, res) => {
 });
 
 // GET /api/categories
-app.get('/api/categories', (_req, res) => {
+app.get('/api/categories', requireAuth, (_req, res) => {
   const config = loadConfig();
   const audioDir = config.audioDir;
 
@@ -147,18 +248,19 @@ app.get('/api/categories', (_req, res) => {
 });
 
 // POST /api/categories
-app.post('/api/categories', (req, res) => {
+app.post('/api/categories', requireAuth, (req, res) => {
   const { name } = req.body;
   if (!name || !name.trim()) return res.status(400).json({ error: 'Nome da categoria é obrigatório' });
 
   const config = loadConfig();
-  const dir = path.join(config.audioDir, name.trim());
+  const dir = safePath(config.audioDir, name.trim());
+  if (!dir) return res.status(400).json({ error: 'Nome de categoria inválido' });
   fs.mkdirSync(dir, { recursive: true });
   res.json({ created: name.trim() });
 });
 
 // GET /api/audios?category=X  ("Geral" returns all audios from all categories)
-app.get('/api/audios', (req, res) => {
+app.get('/api/audios', requireAuth, (req, res) => {
   const config = loadConfig();
   const category = req.query.category || 'Geral';
   const audioDir = config.audioDir;
@@ -215,7 +317,7 @@ app.get('/api/audios', (req, res) => {
 });
 
 // GET /api/audios/search?q=term — fuzzy search across all categories
-app.get('/api/audios/search', (req, res) => {
+app.get('/api/audios/search', requireAuth, (req, res) => {
   const query = (req.query.q || '').toLowerCase().trim();
   if (!query) return res.json([]);
 
@@ -263,16 +365,18 @@ app.get('/api/audios/search', (req, res) => {
 });
 
 // POST /api/audios — upload, then move from temp to correct category folder
-app.post('/api/audios', upload.single('audio'), (req, res) => {
+app.post('/api/audios', requireAuth, upload.single('audio'), (req, res) => {
   if (!req.file) return res.status(400).json({ error: 'Arquivo de áudio inválido' });
 
   const config = loadConfig();
   const category = req.body.category || 'Geral';
-  const destDir = path.join(config.audioDir, category);
+  const destDir = safePath(config.audioDir, category);
+  if (!destDir) { try { fs.unlinkSync(req.file.path); } catch {} return res.status(400).json({ error: 'Categoria inválida' }); }
   fs.mkdirSync(destDir, { recursive: true });
 
   const srcPath = req.file.path;
-  const destPath = path.join(destDir, req.file.filename);
+  const destPath = safePath(destDir, req.file.filename);
+  if (!destPath) { try { fs.unlinkSync(req.file.path); } catch {} return res.status(400).json({ error: 'Nome de arquivo inválido' }); }
   fs.renameSync(srcPath, destPath);
 
   res.json({
@@ -284,7 +388,7 @@ app.post('/api/audios', upload.single('audio'), (req, res) => {
 });
 
 // PUT /api/audios/thumbnail — upload thumbnail for an audio
-app.put('/api/audios/thumbnail', thumbUpload.single('thumbnail'), (req, res) => {
+app.put('/api/audios/thumbnail', requireAuth, thumbUpload.single('thumbnail'), (req, res) => {
   if (!req.file) return res.status(400).json({ error: 'Imagem inválida' });
 
   const config = loadConfig();
@@ -292,7 +396,9 @@ app.put('/api/audios/thumbnail', thumbUpload.single('thumbnail'), (req, res) => 
   const filename = req.body.filename;
   if (!category || !filename) return res.status(400).json({ error: 'Categoria e arquivo são obrigatórios' });
 
-  const destDir = path.join(config.audioDir, category);
+  const destDir = safePath(config.audioDir, category);
+  if (!destDir) { try { fs.unlinkSync(req.file.path); } catch {} return res.status(400).json({ error: 'Categoria inválida' }); }
+  if (!safePath(destDir, filename)) { try { fs.unlinkSync(req.file.path); } catch {} return res.status(400).json({ error: 'Nome de arquivo inválido' }); }
   fs.mkdirSync(destDir, { recursive: true });
 
   // Remove old thumbnail if exists
@@ -318,11 +424,13 @@ app.put('/api/audios/thumbnail', thumbUpload.single('thumbnail'), (req, res) => 
 });
 
 // PUT /api/audios/display — update display name for an audio
-app.put('/api/audios/display', (req, res) => {
+app.put('/api/audios/display', requireAuth, (req, res) => {
   const { category, filename, display } = req.body;
   if (!category || !filename) return res.status(400).json({ error: 'Categoria e arquivo são obrigatórios' });
 
   const config = loadConfig();
+  if (!safePath(config.audioDir, category)) return res.status(400).json({ error: 'Categoria inválida' });
+  if (!safePath(config.audioDir, category, filename)) return res.status(400).json({ error: 'Nome de arquivo inválido' });
   const meta = loadMetadata(config.audioDir, category);
   const entry = meta[filename] || {};
 
@@ -339,18 +447,20 @@ app.put('/api/audios/display', (req, res) => {
 });
 
 // PUT /api/audios/move — move audio from one category to another
-app.put('/api/audios/move', (req, res) => {
+app.put('/api/audios/move', requireAuth, (req, res) => {
   const { category, filename, targetCategory } = req.body;
   if (!category || !filename || !targetCategory) return res.status(400).json({ error: 'Dados insuficientes' });
   if (category === targetCategory) return res.json({ moved: false });
 
   const config = loadConfig();
-  const srcDir = path.join(config.audioDir, category);
-  const destDir = path.join(config.audioDir, targetCategory);
+  const srcDir = safePath(config.audioDir, category);
+  const destDir = safePath(config.audioDir, targetCategory);
+  if (!srcDir || !destDir) return res.status(400).json({ error: 'Categoria inválida' });
   fs.mkdirSync(destDir, { recursive: true });
 
-  const srcFile = path.join(srcDir, filename);
-  const destFile = path.join(destDir, filename);
+  const srcFile = safePath(srcDir, filename);
+  const destFile = safePath(destDir, filename);
+  if (!srcFile || !destFile) return res.status(400).json({ error: 'Nome de arquivo inválido' });
   if (!fs.existsSync(srcFile)) return res.status(404).json({ error: 'Arquivo não encontrado' });
 
   // Move audio file
@@ -381,12 +491,13 @@ app.put('/api/audios/move', (req, res) => {
 });
 
 // DELETE /api/audios
-app.delete('/api/audios', (req, res) => {
+app.delete('/api/audios', requireAuth, (req, res) => {
   const { category, filename } = req.body;
   if (!category || !filename) return res.status(400).json({ error: 'Dados insuficientes' });
 
   const config = loadConfig();
-  const filePath = path.join(config.audioDir, category, filename);
+  const filePath = safePath(config.audioDir, category, filename);
+  if (!filePath) return res.status(400).json({ error: 'Caminho inválido' });
 
   try {
     fs.unlinkSync(filePath);
@@ -399,12 +510,13 @@ app.delete('/api/audios', (req, res) => {
 // ===== Discord Bot API =====
 
 // GET /api/discord/status
-app.get('/api/discord/status', (_req, res) => {
-  res.json(bot.getStatus());
+app.get('/api/discord/status', requireAuth, (req, res) => {
+  const userGuildIds = new Set((req.session.guilds || []).map(g => g.id));
+  res.json(bot.getStatusForUser(userGuildIds, req.session.user.id));
 });
 
 // PUT /api/discord/token
-app.put('/api/discord/token', async (req, res) => {
+app.put('/api/discord/token', requireAuth, async (req, res) => {
   const { token } = req.body;
   if (!token) return res.status(400).json({ error: 'Token não informado' });
 
@@ -422,9 +534,12 @@ app.put('/api/discord/token', async (req, res) => {
 });
 
 // POST /api/discord/join
-app.post('/api/discord/join', (req, res) => {
+app.post('/api/discord/join', requireAuth, (req, res) => {
   const { guildId, channelId } = req.body;
   if (!guildId || !channelId) return res.status(400).json({ error: 'guildId e channelId são obrigatórios' });
+
+  const userGuildIds = new Set((req.session.guilds || []).map(g => g.id));
+  if (!userGuildIds.has(guildId)) return res.status(403).json({ error: 'Você não pertence a este servidor' });
 
   try {
     const result = bot.joinChannel(guildId, channelId);
@@ -441,7 +556,7 @@ app.post('/api/discord/join', (req, res) => {
 });
 
 // POST /api/discord/leave
-app.post('/api/discord/leave', (req, res) => {
+app.post('/api/discord/leave', requireAuth, (req, res) => {
   const { guildId } = req.body;
   if (!guildId) return res.status(400).json({ error: 'guildId é obrigatório' });
 
@@ -453,7 +568,7 @@ app.post('/api/discord/leave', (req, res) => {
 });
 
 // POST /api/discord/play
-app.post('/api/discord/play', (req, res) => {
+app.post('/api/discord/play', requireAuth, (req, res) => {
   const { category, filename } = req.body;
   if (!category || !filename) return res.status(400).json({ error: 'category e filename são obrigatórios' });
 
@@ -461,7 +576,8 @@ app.post('/api/discord/play', (req, res) => {
   const guildId = req.body.guildId || config.discord?.defaultGuildId;
   if (!guildId) return res.status(400).json({ error: 'guildId não informado e sem padrão configurado' });
 
-  const filePath = path.join(config.audioDir, category, filename);
+  const filePath = safePath(config.audioDir, category, filename);
+  if (!filePath) return res.status(400).json({ error: 'Caminho inválido' });
   if (!fs.existsSync(filePath)) return res.status(404).json({ error: 'Arquivo não encontrado' });
 
   try {
@@ -472,7 +588,7 @@ app.post('/api/discord/play', (req, res) => {
 });
 
 // POST /api/discord/stop
-app.post('/api/discord/stop', (req, res) => {
+app.post('/api/discord/stop', requireAuth, (req, res) => {
   const config = loadConfig();
   const guildId = req.body.guildId || config.discord?.defaultGuildId;
   if (!guildId) return res.status(400).json({ error: 'guildId não informado' });
