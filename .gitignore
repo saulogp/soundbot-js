@@ -17,9 +17,16 @@ config.json
 # Build output
 dist/
 build/
+out/
+
+# Electron
+*.exe
+*.blockmap
+*.yml
 
 # OS-specific files
 .DS_Store
+Thumbs.db
 
 # Temp uploads
 .tmp-uploads/

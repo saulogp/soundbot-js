@@ -7,8 +7,10 @@ const bot = require('./discord-bot');
 const app = express();
 const PORT = 3000;
 
-// Config file to persist settings
-const CONFIG_PATH = path.join(__dirname, 'config.json');
+// Config file to persist settings — when running inside Electron the main
+// process sets SOUNDBOT_CONFIG_DIR to app.getPath('userData').
+const CONFIG_DIR = process.env.SOUNDBOT_CONFIG_DIR || __dirname;
+const CONFIG_PATH = path.join(CONFIG_DIR, 'config.json');
 
 function loadConfig() {
   try {
@@ -355,16 +357,30 @@ app.post('/api/discord/stop', (req, res) => {
   }
 });
 
-app.listen(PORT, async () => {
-  console.log(`🎵 SoundBot rodando em http://localhost:${PORT}`);
+async function startServer() {
+  return new Promise((resolve) => {
+    const server = app.listen(PORT, async () => {
+      console.log(`🎵 SoundBot rodando em http://localhost:${PORT}`);
 
-  // Auto-init Discord bot if token exists
-  const config = loadConfig();
-  if (config.discord?.token) {
-    try {
-      await bot.init(config.discord.token);
-    } catch (err) {
-      console.error('Erro ao conectar bot Discord:', err.message);
-    }
-  }
-});
+      // Auto-init Discord bot if token exists
+      const config = loadConfig();
+      if (config.discord?.token) {
+        try {
+          await bot.init(config.discord.token);
+        } catch (err) {
+          console.error('Erro ao conectar bot Discord:', err.message);
+        }
+      }
+
+      resolve(server);
+    });
+  });
+}
+
+// Se executado diretamente (node server.js), inicia o servidor.
+// Se importado pelo Electron, apenas exporta a função.
+if (require.main === module) {
+  startServer();
+}
+
+module.exports = { startServer, PORT };

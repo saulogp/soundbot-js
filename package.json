@@ -1,13 +1,14 @@
 {
   "name": "soundbot",
   "version": "1.0.0",
-  "description": "",
-  "main": "server.js",
-  "directories": {
-    "doc": "docs"
-  },
+  "description": "Bot do Discord para gerenciamento e reprodução de áudio com interface web e desktop",
+  "main": "electron-main.js",
   "scripts": {
     "start": "node server.js",
+    "electron": "electron .",
+    "build": "electron-builder --win",
+    "build:portable": "electron-builder --win portable",
+    "build:nsis": "electron-builder --win nsis",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "keywords": [],
@@ -22,5 +23,58 @@
     "libsodium-wrappers": "^0.8.2",
     "multer": "^2.1.1",
     "opusscript": "^0.0.8"
+  },
+  "devDependencies": {
+    "electron": "^35.7.5",
+    "electron-builder": "^26.8.1"
+  },
+  "build": {
+    "appId": "com.soundbot.app",
+    "productName": "SoundBot",
+    "directories": {
+      "output": "dist",
+      "buildResources": "assets"
+    },
+    "files": [
+      "electron-main.js",
+      "server.js",
+      "discord-bot.js",
+      "package.json",
+      "public/**/*",
+      "node_modules/**/*"
+    ],
+    "extraResources": [
+      {
+        "from": "assets/",
+        "to": "assets/",
+        "filter": [
+          "**/*"
+        ]
+      }
+    ],
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        },
+        {
+          "target": "portable",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "icon": "assets/icon.ico"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "SoundBot"
+    }
   }
 }
