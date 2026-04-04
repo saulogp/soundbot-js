@@ -51,6 +51,7 @@ document.addEventListener('DOMContentLoaded', () => {
   document.getElementById('btnNewCategory').addEventListener('click', promptNewCategory);
   document.getElementById('btnDiscord').addEventListener('click', () => openModal('modalDiscord'));
   initEditModal();
+  initSearch();
 
   // Upload area interactions
   const uploadArea = document.getElementById('uploadArea');
@@ -124,6 +125,11 @@ function renderCategories(categories) {
     btn.className = 'category-tab';
     btn.textContent = cat;
     btn.addEventListener('click', () => {
+      // Clear search
+      const searchInput = document.getElementById('inputSearch');
+      if (searchInput) searchInput.value = '';
+      document.querySelectorAll('.category-tab').forEach(t => t.disabled = false);
+
       currentCategory = cat;
       setActiveCategory(cat);
       loadAudios(cat);
@@ -536,6 +542,39 @@ async function saveEdit() {
 
   document.getElementById('btnSaveThumb').textContent = 'Salvar';
   document.getElementById('btnSaveThumb').disabled = false;
+}
+
+// ===== Search =====
+let searchTimeout = null;
+
+function initSearch() {
+  const input = document.getElementById('inputSearch');
+  input.addEventListener('input', () => {
+    clearTimeout(searchTimeout);
+    searchTimeout = setTimeout(() => performSearch(input.value), 300);
+  });
+}
+
+async function performSearch(query) {
+  const trimmed = query.trim();
+  if (!trimmed) {
+    // Clear search — reload current category
+    document.querySelectorAll('.category-tab').forEach(t => t.disabled = false);
+    setActiveCategory(currentCategory);
+    loadAudios(currentCategory);
+    return;
+  }
+
+  // Visual feedback: deselect category tabs
+  document.querySelectorAll('.category-tab').forEach(t => {
+    t.classList.remove('active');
+    t.disabled = true;
+  });
+  document.querySelector('.category-add-btn').disabled = false;
+
+  const res = await fetch(`/api/audios/search?q=${encodeURIComponent(trimmed)}`);
+  const audios = await res.json();
+  renderAudioGrid(audios);
 }
 
 // ===== Modal Helpers =====

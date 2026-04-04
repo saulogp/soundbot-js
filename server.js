@@ -214,6 +214,54 @@ app.get('/api/audios', (req, res) => {
   }
 });
 
+// GET /api/audios/search?q=term — fuzzy search across all categories
+app.get('/api/audios/search', (req, res) => {
+  const query = (req.query.q || '').toLowerCase().trim();
+  if (!query) return res.json([]);
+
+  const config = loadConfig();
+  const audioDir = config.audioDir;
+  const allowedExt = ['.mp3', '.wav', '.ogg', '.m4a', '.webm', '.flac'];
+
+  try {
+    fs.mkdirSync(audioDir, { recursive: true });
+    const entries = fs.readdirSync(audioDir, { withFileTypes: true });
+    const results = [];
+
+    for (const entry of entries) {
+      if (!entry.isDirectory()) continue;
+      const meta = loadMetadata(audioDir, entry.name);
+      const catDir = path.join(audioDir, entry.name);
+      const files = fs.readdirSync(catDir)
+        .filter(f => allowedExt.includes(path.extname(f).toLowerCase()));
+
+      for (const f of files) {
+        const m = meta[f] || {};
+        const name = path.basename(f, path.extname(f));
+        const display = m.display || '';
+        const searchTarget = `${name} ${display}`.toLowerCase();
+
+        // Check if all query words appear in the search target
+        const words = query.split(/\s+/);
+        if (words.every(w => searchTarget.includes(w))) {
+          results.push({
+            name,
+            display: m.display || null,
+            filename: f,
+            category: entry.name,
+            url: `/audio-files/${encodeURIComponent(entry.name)}/${encodeURIComponent(f)}`,
+            thumbnail: m.thumbnail ? `/audio-files/${encodeURIComponent(entry.name)}/${encodeURIComponent(m.thumbnail)}` : null
+          });
+        }
+      }
+    }
+
+    res.json(results);
+  } catch {
+    res.json([]);
+  }
+});
+
 // POST /api/audios — upload, then move from temp to correct category folder
 app.post('/api/audios', upload.single('audio'), (req, res) => {
   if (!req.file) return res.status(400).json({ error: 'Arquivo de áudio inválido' });
