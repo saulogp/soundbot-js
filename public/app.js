@@ -130,6 +130,27 @@ function renderCategories(categories) {
     });
     $catNav.appendChild(btn);
   });
+
+  // Add new category button
+  const addBtn = document.createElement('button');
+  addBtn.className = 'category-tab category-add-btn';
+  addBtn.title = 'Nova categoria';
+  addBtn.textContent = '+';
+  addBtn.addEventListener('click', addCategoryFromNav);
+  $catNav.appendChild(addBtn);
+}
+
+async function addCategoryFromNav() {
+  const name = prompt('Nome da nova categoria:');
+  if (!name || !name.trim()) return;
+
+  await fetch('/api/categories', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name: name.trim() })
+  });
+
+  loadCategories();
 }
 
 function setActiveCategory(name) {
