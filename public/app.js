@@ -405,13 +405,26 @@ async function uploadAudio() {
 // ===== Edit Audio Modal =====
 let editingAudio = null;
 
-function openEditModal(audio) {
+async function openEditModal(audio) {
   editingAudio = audio;
   document.getElementById('editAudioName').textContent = audio.name;
 
   // Display name
   const displayInput = document.getElementById('inputDisplayName');
   displayInput.value = audio.display || '';
+
+  // Populate category select
+  const res = await fetch('/api/categories');
+  const categories = await res.json();
+  const select = document.getElementById('selectEditCategory');
+  select.innerHTML = '';
+  categories.filter(c => c !== 'Geral').forEach(cat => {
+    const opt = document.createElement('option');
+    opt.value = cat;
+    opt.textContent = cat;
+    if (cat === audio.category) opt.selected = true;
+    select.appendChild(opt);
+  });
 
   const thumbImg = document.getElementById('thumbImg');
   const thumbPlaceholder = document.getElementById('thumbPlaceholder');
@@ -459,13 +472,15 @@ async function saveEdit() {
   document.getElementById('btnSaveThumb').disabled = true;
   document.getElementById('btnSaveThumb').textContent = 'Salvando...';
 
+  let activeCategory = editingAudio.category;
+
   // Save display name
   const displayName = document.getElementById('inputDisplayName').value;
   await fetch('/api/audios/display', {
     method: 'PUT',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
-      category: editingAudio.category,
+      category: activeCategory,
       filename: editingAudio.filename,
       display: displayName
     })
@@ -476,9 +491,23 @@ async function saveEdit() {
   if (file) {
     const formData = new FormData();
     formData.append('thumbnail', file);
-    formData.append('category', editingAudio.category);
+    formData.append('category', activeCategory);
     formData.append('filename', editingAudio.filename);
     await fetch('/api/audios/thumbnail', { method: 'PUT', body: formData });
+  }
+
+  // Move to another category if changed
+  const targetCategory = document.getElementById('selectEditCategory').value;
+  if (targetCategory && targetCategory !== activeCategory) {
+    await fetch('/api/audios/move', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        category: activeCategory,
+        filename: editingAudio.filename,
+        targetCategory
+      })
+    });
   }
 
   closeModal('modalEditAudio');

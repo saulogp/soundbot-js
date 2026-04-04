@@ -290,6 +290,48 @@ app.put('/api/audios/display', (req, res) => {
   res.json({ display: entry.display || null });
 });
 
+// PUT /api/audios/move — move audio from one category to another
+app.put('/api/audios/move', (req, res) => {
+  const { category, filename, targetCategory } = req.body;
+  if (!category || !filename || !targetCategory) return res.status(400).json({ error: 'Dados insuficientes' });
+  if (category === targetCategory) return res.json({ moved: false });
+
+  const config = loadConfig();
+  const srcDir = path.join(config.audioDir, category);
+  const destDir = path.join(config.audioDir, targetCategory);
+  fs.mkdirSync(destDir, { recursive: true });
+
+  const srcFile = path.join(srcDir, filename);
+  const destFile = path.join(destDir, filename);
+  if (!fs.existsSync(srcFile)) return res.status(404).json({ error: 'Arquivo não encontrado' });
+
+  // Move audio file
+  fs.renameSync(srcFile, destFile);
+
+  // Move metadata (thumbnail + display)
+  const srcMeta = loadMetadata(config.audioDir, category);
+  const entry = srcMeta[filename] || {};
+
+  // Move thumbnail file if exists
+  if (entry.thumbnail) {
+    const srcThumb = path.join(srcDir, entry.thumbnail);
+    const destThumb = path.join(destDir, entry.thumbnail);
+    try { fs.renameSync(srcThumb, destThumb); } catch {}
+  }
+
+  // Update metadata in both categories
+  delete srcMeta[filename];
+  saveMetadata(config.audioDir, category, srcMeta);
+
+  if (Object.keys(entry).length > 0) {
+    const destMeta = loadMetadata(config.audioDir, targetCategory);
+    destMeta[filename] = entry;
+    saveMetadata(config.audioDir, targetCategory, destMeta);
+  }
+
+  res.json({ moved: true, category: targetCategory });
+});
+
 // DELETE /api/audios
 app.delete('/api/audios', (req, res) => {
   const { category, filename } = req.body;
