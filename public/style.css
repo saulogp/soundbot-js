@@ -281,6 +281,36 @@ body {
   color: var(--text-muted);
 }
 
+/* ===== Source Toggle (Add Audio Modal) ===== */
+.source-toggle {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+.source-option {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 8px 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+  color: var(--text-muted);
+  cursor: pointer;
+  font-size: 0.85rem;
+  transition: all var(--transition);
+}
+.source-option:hover {
+  border-color: var(--text-muted);
+}
+.source-option.active {
+  border-color: var(--primary);
+  color: var(--text);
+  background: var(--bg);
+}
+
 /* ===== Audio Grid ===== */
 .grid-container {
   padding: 8px 0 40px;

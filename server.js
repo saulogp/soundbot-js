@@ -4,6 +4,7 @@ const crypto = require('crypto');
 const multer = require('multer');
 const path = require('path');
 const fs = require('fs');
+const { spawn } = require('child_process');
 const bot = require('./discord-bot');
 
 const app = express();
@@ -269,6 +270,22 @@ app.get('/api/audios', requireAuth, (req, res) => {
   try {
     fs.mkdirSync(audioDir, { recursive: true });
 
+    // Helper to extract YouTube entries from metadata
+    function getYouTubeEntries(meta, catName) {
+      return Object.entries(meta)
+        .filter(([, v]) => v.type === 'youtube')
+        .map(([key, v]) => ({
+          name: v.display || 'YouTube',
+          display: v.display || null,
+          filename: key,
+          category: catName,
+          url: null,
+          youtubeUrl: v.youtubeUrl,
+          type: 'youtube',
+          thumbnail: v.thumbnail ? `/audio-files/${encodeURIComponent(catName)}/${encodeURIComponent(v.thumbnail)}` : null
+        }));
+    }
+
     if (category === 'Geral') {
       const entries = fs.readdirSync(audioDir, { withFileTypes: true });
       const allFiles = [];
@@ -289,7 +306,7 @@ app.get('/api/audios', requireAuth, (req, res) => {
               thumbnail: m.thumbnail ? `/audio-files/${encodeURIComponent(entry.name)}/${encodeURIComponent(m.thumbnail)}` : null
             };
           });
-        allFiles.push(...files);
+        allFiles.push(...files, ...getYouTubeEntries(meta, entry.name));
       }
       res.json(allFiles);
     } else {
@@ -309,7 +326,7 @@ app.get('/api/audios', requireAuth, (req, res) => {
             thumbnail: m.thumbnail ? `/audio-files/${encodeURIComponent(category)}/${encodeURIComponent(m.thumbnail)}` : null
           };
         });
-      res.json(files);
+      res.json([...files, ...getYouTubeEntries(meta, category)]);
     }
   } catch {
     res.json([]);
@@ -343,7 +360,6 @@ app.get('/api/audios/search', requireAuth, (req, res) => {
         const display = m.display || '';
         const searchTarget = `${name} ${display}`.toLowerCase();
 
-        // Check if all query words appear in the search target
         const words = query.split(/\s+/);
         if (words.every(w => searchTarget.includes(w))) {
           results.push({
@@ -353,6 +369,26 @@ app.get('/api/audios/search', requireAuth, (req, res) => {
             category: entry.name,
             url: `/audio-files/${encodeURIComponent(entry.name)}/${encodeURIComponent(f)}`,
             thumbnail: m.thumbnail ? `/audio-files/${encodeURIComponent(entry.name)}/${encodeURIComponent(m.thumbnail)}` : null
+          });
+        }
+      }
+
+      // Search YouTube entries in metadata
+      for (const [key, v] of Object.entries(meta)) {
+        if (v.type !== 'youtube') continue;
+        const display = v.display || 'YouTube';
+        const searchTarget = display.toLowerCase();
+        const words = query.split(/\s+/);
+        if (words.every(w => searchTarget.includes(w))) {
+          results.push({
+            name: display,
+            display: v.display || null,
+            filename: key,
+            category: entry.name,
+            url: null,
+            youtubeUrl: v.youtubeUrl,
+            type: 'youtube',
+            thumbnail: v.thumbnail ? `/audio-files/${encodeURIComponent(entry.name)}/${encodeURIComponent(v.thumbnail)}` : null
           });
         }
       }
@@ -385,6 +421,32 @@ app.post('/api/audios', requireAuth, upload.single('audio'), (req, res) => {
     category,
     url: `/audio-files/${encodeURIComponent(category)}/${encodeURIComponent(req.file.filename)}`
   });
+});
+
+// POST /api/audios/youtube — save a YouTube URL as an audio entry in metadata
+app.post('/api/audios/youtube', requireAuth, (req, res) => {
+  const { category, url, name } = req.body;
+  if (!category || !url) return res.status(400).json({ error: 'category e url são obrigatórios' });
+
+  const ytRegex = /^(https?:\/\/)?(www\.)?(youtube\.com\/(watch\?v=|shorts\/)|youtu\.be\/|music\.youtube\.com\/watch\?v=)/;
+  if (!ytRegex.test(url)) return res.status(400).json({ error: 'URL do YouTube inválida' });
+
+  const config = loadConfig();
+  const dir = safePath(config.audioDir, category);
+  if (!dir) return res.status(400).json({ error: 'Categoria inválida' });
+  fs.mkdirSync(dir, { recursive: true });
+
+  // Use a unique key based on video ID or timestamp
+  const key = `yt_${Date.now()}`;
+  const meta = loadMetadata(config.audioDir, category);
+  meta[key] = {
+    display: name || null,
+    youtubeUrl: url,
+    type: 'youtube'
+  };
+  saveMetadata(config.audioDir, category, meta);
+
+  res.json({ key, category, url });
 });
 
 // PUT /api/audios/thumbnail — upload thumbnail for an audio
@@ -458,6 +520,31 @@ app.put('/api/audios/move', requireAuth, (req, res) => {
   if (!srcDir || !destDir) return res.status(400).json({ error: 'Categoria inválida' });
   fs.mkdirSync(destDir, { recursive: true });
 
+  // YouTube entries are metadata-only
+  if (filename.startsWith('yt_')) {
+    const srcMeta = loadMetadata(config.audioDir, category);
+    const entry = srcMeta[filename];
+    if (!entry) return res.status(404).json({ error: 'Entrada não encontrada' });
+
+    // Move thumbnail file if exists
+    if (entry.thumbnail) {
+      const srcThumb = safePath(srcDir, entry.thumbnail);
+      const destThumb = safePath(destDir, entry.thumbnail);
+      if (srcThumb && destThumb && fs.existsSync(srcThumb)) {
+        fs.renameSync(srcThumb, destThumb);
+      }
+    }
+
+    delete srcMeta[filename];
+    saveMetadata(config.audioDir, category, srcMeta);
+
+    const destMeta = loadMetadata(config.audioDir, targetCategory);
+    destMeta[filename] = entry;
+    saveMetadata(config.audioDir, targetCategory, destMeta);
+
+    return res.json({ moved: true, category: targetCategory });
+  }
+
   const srcFile = safePath(srcDir, filename);
   const destFile = safePath(destDir, filename);
   if (!srcFile || !destFile) return res.status(400).json({ error: 'Nome de arquivo inválido' });
@@ -496,6 +583,22 @@ app.delete('/api/audios', requireAuth, (req, res) => {
   if (!category || !filename) return res.status(400).json({ error: 'Dados insuficientes' });
 
   const config = loadConfig();
+
+  // YouTube entries are metadata-only (key starts with yt_)
+  if (filename.startsWith('yt_')) {
+    const meta = loadMetadata(config.audioDir, category);
+    const entry = meta[filename];
+    if (!entry) return res.status(404).json({ error: 'Entrada não encontrada' });
+    // Remove thumbnail file if exists
+    if (entry.thumbnail) {
+      const thumbPath = safePath(config.audioDir, category, entry.thumbnail);
+      if (thumbPath) try { fs.unlinkSync(thumbPath); } catch {}
+    }
+    delete meta[filename];
+    saveMetadata(config.audioDir, category, meta);
+    return res.json({ deleted: true });
+  }
+
   const filePath = safePath(config.audioDir, category, filename);
   if (!filePath) return res.status(400).json({ error: 'Caminho inválido' });
 
@@ -585,6 +688,61 @@ app.post('/api/discord/play', requireAuth, (req, res) => {
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
+});
+
+// POST /api/discord/play-youtube
+app.post('/api/discord/play-youtube', requireAuth, (req, res) => {
+  const { url } = req.body;
+  if (!url) return res.status(400).json({ error: 'URL é obrigatória' });
+
+  const ytRegex = /^(https?:\/\/)?(www\.)?(youtube\.com\/(watch\?v=|shorts\/)|youtu\.be\/|music\.youtube\.com\/watch\?v=)/;
+  if (!ytRegex.test(url)) return res.status(400).json({ error: 'URL do YouTube inválida' });
+
+  const config = loadConfig();
+  const guildId = req.body.guildId || config.discord?.defaultGuildId;
+  if (!guildId) return res.status(400).json({ error: 'guildId não informado e sem padrão configurado' });
+
+  try {
+    res.json(bot.playYouTube(guildId, url));
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// GET /api/youtube/stream?url=...
+app.get('/api/youtube/stream', requireAuth, (req, res) => {
+  const url = req.query.url;
+  if (!url) return res.status(400).json({ error: 'URL é obrigatória' });
+
+  const ytRegex = /^(https?:\/\/)?(www\.)?(youtube\.com\/(watch\?v=|shorts\/)|youtu\.be\/|music\.youtube\.com\/watch\?v=)/;
+  if (!ytRegex.test(url)) return res.status(400).json({ error: 'URL do YouTube inválida' });
+
+  const ytdlp = spawn('yt-dlp', [
+    '-f', 'bestaudio',
+    '-o', '-',
+    '--no-playlist',
+    '--no-warnings',
+    '--quiet',
+    url
+  ], { stdio: ['ignore', 'pipe', 'pipe'] });
+
+  res.setHeader('Content-Type', 'audio/webm');
+  res.setHeader('Transfer-Encoding', 'chunked');
+
+  ytdlp.stdout.pipe(res);
+
+  ytdlp.on('error', (err) => {
+    console.error('yt-dlp stream error:', err.message);
+    if (!res.headersSent) res.status(500).json({ error: 'Erro ao iniciar yt-dlp' });
+  });
+
+  ytdlp.stderr.on('data', (data) => {
+    console.error('yt-dlp stderr:', data.toString());
+  });
+
+  res.on('close', () => {
+    ytdlp.kill('SIGTERM');
+  });
 });
 
 // POST /api/discord/stop

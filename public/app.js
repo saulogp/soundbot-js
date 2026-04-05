@@ -97,6 +97,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   document.getElementById('btnDiscord').addEventListener('click', () => openModal('modalDiscord'));
   initEditModal();
   initSearch();
+  initSourceToggle();
 
   // Upload area interactions
   const uploadArea = document.getElementById('uploadArea');
@@ -225,13 +226,22 @@ function renderAudioGrid(audios) {
   audios.forEach(audio => {
     const card = document.createElement('div');
     card.className = 'audio-card';
-    card.dataset.url = audio.url;
+    card.dataset.url = audio.url || '';
     card.dataset.filename = audio.filename;
     card.dataset.category = audio.category;
+    if (audio.type === 'youtube') {
+      card.dataset.type = 'youtube';
+      card.dataset.youtubeUrl = audio.youtubeUrl;
+    }
 
-    const iconHtml = audio.thumbnail
-      ? `<img class="card-thumb" src="${audio.thumbnail}" alt="">`
-      : `<div class="card-icon">&#9835;</div>`;
+    let iconHtml;
+    if (audio.thumbnail) {
+      iconHtml = `<img class="card-thumb" src="${audio.thumbnail}" alt="">`;
+    } else if (audio.type === 'youtube') {
+      iconHtml = `<div class="card-icon card-icon-yt"><svg width="24" height="24" viewBox="0 0 24 24" fill="#FF0000"><path d="M23.498 6.186a3.016 3.016 0 0 0-2.122-2.136C19.505 3.545 12 3.545 12 3.545s-7.505 0-9.377.505A3.017 3.017 0 0 0 .502 6.186C0 8.07 0 12 0 12s0 3.93.502 5.814a3.016 3.016 0 0 0 2.122 2.136c1.871.505 9.376.505 9.376.505s7.505 0 9.377-.505a3.015 3.015 0 0 0 2.122-2.136C24 15.93 24 12 24 12s0-3.93-.502-5.814zM9.545 15.568V8.432L15.818 12l-6.273 3.568z"/></svg></div>`;
+    } else {
+      iconHtml = `<div class="card-icon">&#9835;</div>`;
+    }
 
     card.innerHTML = `
       <div class="card-actions">
@@ -249,7 +259,11 @@ function renderAudioGrid(audios) {
 
     card.addEventListener('click', e => {
       if (e.target.closest('.card-action-btn')) return;
-      togglePlay(card, audio.url);
+      if (audio.type === 'youtube') {
+        togglePlayYouTube(card, audio.youtubeUrl, audio.display || audio.name);
+      } else {
+        togglePlay(card, audio.url);
+      }
     });
 
     card.querySelector('.card-action-btn.edit').addEventListener('click', e => {
@@ -308,6 +322,35 @@ function togglePlay(card, url) {
         $toastTime.textContent = `${formatTime(elapsed)} / ${formatTime(duration)}`;
       }, 250);
     });
+  }
+
+  showToast(name);
+}
+
+function togglePlayYouTube(card, youtubeUrl, name) {
+  if (playingCard === card) {
+    stopPlaying();
+    return;
+  }
+
+  stopPlaying();
+  playingCard = card;
+  card.classList.add('playing');
+
+  // Browser playback (local or both)
+  if (playbackMode === 'local' || playbackMode === 'both') {
+    const streamUrl = '/api/youtube/stream?url=' + encodeURIComponent(youtubeUrl);
+    audioPlayer.src = streamUrl;
+    audioPlayer.play();
+  }
+
+  // Discord playback (discord or both)
+  if (playbackMode === 'discord' || playbackMode === 'both') {
+    fetch('/api/discord/play-youtube', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ url: youtubeUrl })
+    }).catch(err => console.error('Discord YouTube play error:', err));
   }
 
   showToast(name);
@@ -395,10 +438,44 @@ async function saveDirectory() {
 }
 
 // ===== Add Audio Modal =====
+let addAudioSource = 'file'; // 'file' or 'youtube'
+
 function openAddAudioModal() {
   clearFile();
+  setAddAudioSource('file');
+  document.getElementById('inputYoutubeUrl').value = '';
+  document.getElementById('inputYoutubeName').value = '';
   populateCategorySelect();
   openModal('modalAddAudio');
+}
+
+function initSourceToggle() {
+  document.getElementById('sourceToggle').querySelectorAll('.source-option').forEach(btn => {
+    btn.addEventListener('click', () => setAddAudioSource(btn.dataset.source));
+  });
+
+  // Enable upload button when YouTube URL is typed
+  document.getElementById('inputYoutubeUrl').addEventListener('input', () => {
+    if (addAudioSource === 'youtube') {
+      document.getElementById('btnUpload').disabled = !document.getElementById('inputYoutubeUrl').value.trim();
+    }
+  });
+}
+
+function setAddAudioSource(source) {
+  addAudioSource = source;
+  document.querySelectorAll('.source-option').forEach(btn => {
+    btn.classList.toggle('active', btn.dataset.source === source);
+  });
+  document.getElementById('fileSourceArea').style.display = source === 'file' ? '' : 'none';
+  document.getElementById('youtubeSourceArea').style.display = source === 'youtube' ? '' : 'none';
+
+  // Reset upload button state
+  if (source === 'file') {
+    document.getElementById('btnUpload').disabled = !document.getElementById('inputAudioFile').files[0];
+  } else {
+    document.getElementById('btnUpload').disabled = !document.getElementById('inputYoutubeUrl').value.trim();
+  }
 }
 
 async function populateCategorySelect() {
@@ -449,6 +526,10 @@ function clearFile() {
 }
 
 async function uploadAudio() {
+  if (addAudioSource === 'youtube') {
+    return uploadYouTubeAudio();
+  }
+
   const input = document.getElementById('inputAudioFile');
   const file = input.files[0];
   if (!file) return;
@@ -468,6 +549,40 @@ async function uploadAudio() {
     currentCategory = category;
     setActiveCategory(category);
     loadAudios(category);
+  }
+
+  document.getElementById('btnUpload').textContent = 'Enviar';
+  document.getElementById('btnUpload').disabled = false;
+}
+
+async function uploadYouTubeAudio() {
+  const url = document.getElementById('inputYoutubeUrl').value.trim();
+  const name = document.getElementById('inputYoutubeName').value.trim();
+  const category = document.getElementById('selectCategory').value;
+  if (!url) return;
+
+  document.getElementById('btnUpload').disabled = true;
+  document.getElementById('btnUpload').textContent = 'Salvando...';
+
+  try {
+    const res = await fetch('/api/audios/youtube', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ category, url, name: name || null })
+    });
+
+    if (res.ok) {
+      closeModal('modalAddAudio');
+      currentCategory = category;
+      setActiveCategory(category);
+      loadAudios(category);
+    } else {
+      const data = await res.json();
+      alert(data.error || 'Erro ao salvar YouTube');
+    }
+  } catch (err) {
+    console.error('YouTube save error:', err);
+    alert('Erro ao salvar YouTube');
   }
 
   document.getElementById('btnUpload').textContent = 'Enviar';
@@ -799,6 +914,7 @@ function setPlaybackMode(mode) {
     btn.classList.toggle('active', btn.dataset.mode === mode);
   });
 }
+
 
 // ===== Utilities =====
 function escapeHtml(str) {

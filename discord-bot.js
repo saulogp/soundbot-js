@@ -6,12 +6,15 @@ const {
   AudioPlayerStatus,
   VoiceConnectionStatus,
   NoSubscriberBehavior,
-  entersState
+  entersState,
+  StreamType
 } = require('@discordjs/voice');
+const { spawn } = require('child_process');
 
 let client = null;
 const connections = new Map(); // guildId -> VoiceConnection
 const players = new Map();     // guildId -> AudioPlayer
+const ytProcesses = new Map(); // guildId -> ChildProcess
 
 async function init(token) {
   if (client) {
@@ -137,6 +140,7 @@ function joinChannel(guildId, channelId) {
 }
 
 function leaveChannel(guildId) {
+  killYtProcess(guildId);
   const conn = connections.get(guildId);
   if (conn) {
     conn.destroy();
@@ -169,15 +173,80 @@ function playAudio(guildId, filePath) {
   return { playing: true };
 }
 
+function playYouTube(guildId, url) {
+  const conn = connections.get(guildId);
+  if (!conn) throw new Error('Bot não está em um canal de voz neste servidor');
+
+  // Kill any existing yt-dlp process for this guild
+  killYtProcess(guildId);
+
+  const ytdlp = spawn('yt-dlp', [
+    '-f', 'bestaudio',
+    '-o', '-',
+    '--no-playlist',
+    '--no-warnings',
+    '--quiet',
+    url
+  ], { stdio: ['ignore', 'pipe', 'pipe'] });
+
+  ytProcesses.set(guildId, ytdlp);
+
+  ytdlp.on('error', (err) => {
+    console.error(`Erro ao iniciar yt-dlp [${guildId}]:`, err.message);
+    ytProcesses.delete(guildId);
+  });
+
+  ytdlp.stderr.on('data', (data) => {
+    console.error(`yt-dlp stderr [${guildId}]:`, data.toString());
+  });
+
+  ytdlp.on('close', () => {
+    ytProcesses.delete(guildId);
+  });
+
+  // Reuse or create player
+  let player = players.get(guildId);
+  if (!player) {
+    player = createAudioPlayer({
+      behaviors: { noSubscriber: NoSubscriberBehavior.Pause }
+    });
+    player.on('error', err => {
+      console.error(`Erro no AudioPlayer [${guildId}]:`, err.message);
+      killYtProcess(guildId);
+    });
+    players.set(guildId, player);
+    conn.subscribe(player);
+  }
+
+  const resource = createAudioResource(ytdlp.stdout, {
+    inputType: StreamType.Arbitrary
+  });
+  player.play(resource);
+
+  return { playing: true };
+}
+
+function killYtProcess(guildId) {
+  const proc = ytProcesses.get(guildId);
+  if (proc) {
+    proc.kill('SIGTERM');
+    ytProcesses.delete(guildId);
+  }
+}
+
 function stopAudio(guildId) {
   const player = players.get(guildId);
   if (player) {
     player.stop();
   }
+  killYtProcess(guildId);
   return { stopped: true };
 }
 
 async function destroy() {
+  for (const guildId of ytProcesses.keys()) {
+    killYtProcess(guildId);
+  }
   for (const [guildId, conn] of connections) {
     conn.destroy();
   }
@@ -194,4 +263,4 @@ function isReady() {
   return client && client.isReady();
 }
 
-module.exports = { init, getStatus, getStatusForUser, joinChannel, leaveChannel, playAudio, stopAudio, destroy, isReady };
+module.exports = { init, getStatus, getStatusForUser, joinChannel, leaveChannel, playAudio, playYouTube, stopAudio, destroy, isReady };
