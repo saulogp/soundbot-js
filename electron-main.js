@@ -21,6 +21,7 @@ function createWindow() {
     }
   });
 
+  // server.js is already required and cached by whenReady — safe to re-require
   const { PORT } = require('./server');
   mainWindow.loadURL(`http://localhost:${PORT}`);
 

@@ -20,7 +20,7 @@ function loadConfig() {
     return JSON.parse(fs.readFileSync(CONFIG_PATH, 'utf-8'));
   } catch {
     const defaults = {
-      audioDir: path.join(__dirname, 'audios'),
+      audioDir: path.join(CONFIG_DIR, 'audios'),
       categories: ['Geral'],
       discord: { token: '', clientId: '', clientSecret: '', redirectUri: 'http://localhost:3000/auth/discord/callback', defaultGuildId: '', defaultChannelId: '' }
     };
@@ -33,8 +33,10 @@ function saveConfig(config) {
   fs.writeFileSync(CONFIG_PATH, JSON.stringify(config, null, 2));
 }
 
-// Multer setup — save to temp dir first, then move to category folder
-const TEMP_DIR = path.join(__dirname, '.tmp-uploads');
+// Multer setup — save to temp dir first, then move to category folder.
+// When running inside Electron the asar is read-only, so use CONFIG_DIR
+// (which Electron sets to app.getPath('userData')) for writable storage.
+const TEMP_DIR = path.join(CONFIG_DIR, '.tmp-uploads');
 fs.mkdirSync(TEMP_DIR, { recursive: true });
 
 const upload = multer({
@@ -197,7 +199,7 @@ app.post('/auth/logout', (req, res) => {
   });
 });
 
-app.use(express.static('public'));
+app.use(express.static(path.join(__dirname, 'public')));
 
 // Serve audio files from the configured directory
 app.use('/audio-files', (req, res, next) => {
