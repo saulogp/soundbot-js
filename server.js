@@ -17,12 +17,24 @@ const CONFIG_PATH = path.join(CONFIG_DIR, 'config.json');
 
 function loadConfig() {
   try {
-    return JSON.parse(fs.readFileSync(CONFIG_PATH, 'utf-8'));
+    const config = JSON.parse(fs.readFileSync(CONFIG_PATH, 'utf-8'));
+    // Environment variables override saved config (useful for pre-configured builds)
+    if (process.env.SOUNDBOT_CLIENT_ID) config.discord.clientId = process.env.SOUNDBOT_CLIENT_ID;
+    if (process.env.SOUNDBOT_CLIENT_SECRET) config.discord.clientSecret = process.env.SOUNDBOT_CLIENT_SECRET;
+    if (process.env.SOUNDBOT_BOT_TOKEN) config.discord.token = process.env.SOUNDBOT_BOT_TOKEN;
+    return config;
   } catch {
     const defaults = {
       audioDir: path.join(CONFIG_DIR, 'audios'),
       categories: ['Geral'],
-      discord: { token: '', clientId: '', clientSecret: '', redirectUri: 'http://localhost:3000/auth/discord/callback', defaultGuildId: '', defaultChannelId: '' }
+      discord: {
+        token: process.env.SOUNDBOT_BOT_TOKEN || '',
+        clientId: process.env.SOUNDBOT_CLIENT_ID || '',
+        clientSecret: process.env.SOUNDBOT_CLIENT_SECRET || '',
+        redirectUri: 'http://localhost:3000/auth/discord/callback',
+        defaultGuildId: '',
+        defaultChannelId: ''
+      }
     };
     fs.writeFileSync(CONFIG_PATH, JSON.stringify(defaults, null, 2));
     return defaults;
@@ -743,7 +755,7 @@ app.get('/api/youtube/stream', requireAuth, (req, res) => {
   });
 
   res.on('close', () => {
-    ytdlp.kill('SIGTERM');
+    if (!ytdlp.killed) ytdlp.kill();
   });
 });
 
@@ -760,9 +772,11 @@ app.post('/api/discord/stop', requireAuth, (req, res) => {
   }
 });
 
+let httpServer = null;
+
 async function startServer() {
   return new Promise((resolve) => {
-    const server = app.listen(PORT, async () => {
+    httpServer = app.listen(PORT, async () => {
       console.log(`🎵 SoundBot rodando em http://localhost:${PORT}`);
 
       // Auto-init Discord bot if token exists
@@ -775,9 +789,17 @@ async function startServer() {
         }
       }
 
-      resolve(server);
+      resolve(httpServer);
     });
   });
+}
+
+async function stopServer() {
+  await bot.destroy();
+  if (httpServer) {
+    await new Promise(resolve => httpServer.close(resolve));
+    httpServer = null;
+  }
 }
 
 // Se executado diretamente (node server.js), inicia o servidor.
@@ -786,4 +808,4 @@ if (require.main === module) {
   startServer();
 }
 
-module.exports = { startServer, PORT };
+module.exports = { startServer, stopServer, PORT };

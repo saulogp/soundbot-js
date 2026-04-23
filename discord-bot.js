@@ -228,8 +228,8 @@ function playYouTube(guildId, url) {
 
 function killYtProcess(guildId) {
   const proc = ytProcesses.get(guildId);
-  if (proc) {
-    proc.kill('SIGTERM');
+  if (proc && !proc.killed) {
+    proc.kill();
     ytProcesses.delete(guildId);
   }
 }

@@ -596,6 +596,8 @@ body {
   animation: slideUp 200ms ease;
 }
 
+.modal.modal-sm { max-width: 360px; }
+
 @keyframes fadeIn {
   from { opacity: 0; }
   to { opacity: 1; }

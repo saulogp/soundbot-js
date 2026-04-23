@@ -277,6 +277,26 @@
     </div>
   </div>
 
+  <!-- Modal: New Category -->
+  <div class="modal-overlay" id="modalNewCategory" style="display:none;">
+    <div class="modal modal-sm">
+      <div class="modal-header">
+        <h2>Nova Categoria</h2>
+        <button class="modal-close" data-close="modalNewCategory">&times;</button>
+      </div>
+      <div class="modal-body">
+        <div class="input-group">
+          <label for="inputNewCategory">Nome da categoria</label>
+          <input type="text" id="inputNewCategory" class="input" placeholder="Ex: Memes, Músicas...">
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-ghost" data-close="modalNewCategory">Cancelar</button>
+        <button class="btn btn-primary" id="btnConfirmNewCategory">Criar</button>
+      </div>
+    </div>
+  </div>
+
   <!-- Toast Player -->
   <div class="toast-player" id="toastPlayer">
     <div class="toast-info">

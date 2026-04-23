@@ -1,155 +1,66 @@
-# 🎵 SoundBot
+# SoundBot
 
-Bot do Discord para gerenciamento e reprodução de áudio com interface web integrada.
+Aplicacao para gerenciamento e reproducao de audio em canais de voz do Discord, com interface web e versao desktop (Electron).
 
-## 📋 Sobre
+## Requisitos
 
-SoundBot é um bot Discord completo que permite:
-- 🎤 Reproduzir áudio em canais de voz
-- 📤 Fazer upload de arquivos de áudio via API web
-- 📁 Organizar áudios por categorias
-- ⚙️ Gerenciar configurações através de interface REST
+- **Node.js** 18+
+- **yt-dlp** (necessario para reproducao de audio do YouTube)
 
-## 🚀 Requisitos
-
-- **Node.js** 16.0.0 ou superior
-- **FFmpeg** instalado no sistema
-- Token do bot Discord
-- IDs do servidor (Guild) e canal do Discord
-
-## 📦 Instalação
+### Instalando o yt-dlp (Windows)
 
 ```bash
-# Clonar repositório
-git clone <repositorio>
-cd soundbot
+winget install yt-dlp.yt-dlp
+```
 
-# Instalar dependências
+> Sem o yt-dlp, o app funciona normalmente para audios locais, mas a reproducao de links do YouTube nao estara disponivel.
+
+## Executando
+
+```bash
+# Instalar dependencias
 npm install
-```
 
-## ⚙️ Configuração
-
-### 1. Criar arquivo `.env` (opcional)
-Você pode usar variáveis de ambiente ou editar o `config.json` diretamente.
-
-### 2. Arquivo `config.json`
-Na primeira execução, um arquivo `config.json` será criado automaticamente com a estrutura:
-
-```json
-{
-  "audioDir": "./audios",
-  "categories": ["Geral"],
-  "discord": {
-    "token": "seu_token_aqui",
-    "defaultGuildId": "seu_guild_id",
-    "defaultChannelId": "seu_channel_id"
-  }
-}
-```
-
-### 3. Obter credenciais Discord
-
-1. Acesse [Discord Developer Portal](https://discord.com/developers/applications)
-2. Crie uma nova aplicação
-3. Vá para a aba "Bot" e copie o token
-4. Em "OAuth2 > URL Generator", selecione permissões necessárias:
-   - `bot`
-   - `connect`
-   - `speak`
-
-5. Copie a URL gerada e acesse para adicionar o bot ao seu servidor
-
-6. Obtenha os IDs:
-   - **Guild ID**: Ative modo desenvolvedor no Discord, clique direito no servidor → Copiar ID do servidor
-   - **Channel ID**: Clique direito no canal de voz → Copiar ID do canal
-
-## 🎯 Uso
-
-### Iniciar o servidor
-
-```bash
+# Servidor standalone (porta 3000)
 npm start
+
+# Versao desktop (Electron)
+npm run electron
 ```
 
-O servidor iniciará em `http://localhost:3000`
-
-### Endpoints da API
-
-#### **Fazer upload de áudio**
-```bash
-POST /upload
-Content-Type: multipart/form-data
-
-Parâmetros:
-- file: arquivo de áudio
-- category: categoria (opcional)
-```
-
-**Formatos suportados**: `.mp3`, `.wav`, `.ogg`, `.m4a`, `.webm`, `.flac`
-
-#### **Listar áudios**
-```bash
-GET /audios
-```
-
-#### **Reproduzir áudio**
-```bash
-POST /play/:filename
-```
-
-#### **Parar reprodução**
-```bash
-POST /stop
-```
-
-#### **Gerenciar categorias**
-```bash
-GET /categories          # Listar categorias
-POST /categories         # Adicionar categoria
-DELETE /categories/:name # Remover categoria
-```
-
-## 📁 Estrutura do Projeto
-
-```
-soundbot/
-├── server.js           # Servidor Express principal
-├── discord-bot.js      # Lógica do bot Discord
-├── config.json         # Arquivo de configuração
-├── package.json        # Dependências do projeto
-├── audios/             # Diretório de áudios
-├── docs/               # Documentação adicional
-└── .tmp-uploads/       # Arquivos temporários de upload
-```
-
-## 🛠️ Dependências Principais
-
-- **discord.js**: SDK do Discord
-- **@discordjs/voice**: Suporte para áudio no Discord
-- **express**: Framework web
-- **multer**: Processamento de upload de arquivos
-- **ffmpeg-static**: Codificação de áudio
-- **opusscript**: Codec Opus para voz
-- **libsodium-wrappers**: Criptografia
-
-## 🔧 Desenvolvimento
-
-### Scripts disponíveis
+## Build (Windows x64)
 
 ```bash
-npm start    # Iniciar servidor
-npm test     # Executar testes (não configurado)
+# NSIS installer + portable
+npm run build
+
+# Apenas installer
+npm run build:nsis
+
+# Apenas portable
+npm run build:portable
 ```
 
-## 📝 Licença
+Os executaveis serao gerados na pasta `dist/`.
 
-ISC
+## Configuracao inicial
 
-## 📧 Contato
+1. Abra o app e faca login com sua conta Discord
+2. Nas configuracoes do Discord, informe o **Bot Token**, **Client ID** e **Client Secret**
+3. Aponte o diretorio onde os arquivos de audio estao armazenados
+4. Adicione o bot ao seu servidor Discord e entre em um canal de voz
 
-Para dúvidas ou sugestões, abra uma issue no repositório.
+> Para obter as credenciais, crie uma aplicacao no [Discord Developer Portal](https://discord.com/developers/applications).
 
----
+## Dependencias principais
 
-**Status**: Em desenvolvimento
+| Pacote | Uso |
+|---|---|
+| discord.js | SDK do Discord |
+| @discordjs/voice | Audio em canais de voz |
+| express | Servidor web e API REST |
+| multer | Upload de arquivos |
+| ffmpeg-static | Codec de audio |
+| opusscript | Codec Opus |
+| libsodium-wrappers | Criptografia |
+| electron | Versao desktop |

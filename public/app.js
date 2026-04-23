@@ -94,6 +94,10 @@ document.addEventListener('DOMContentLoaded', async () => {
   document.getElementById('btnSaveDirectory').addEventListener('click', saveDirectory);
   document.getElementById('btnUpload').addEventListener('click', uploadAudio);
   document.getElementById('btnNewCategory').addEventListener('click', promptNewCategory);
+  document.getElementById('btnConfirmNewCategory').addEventListener('click', confirmNewCategory);
+  document.getElementById('inputNewCategory').addEventListener('keydown', e => {
+    if (e.key === 'Enter') confirmNewCategory();
+  });
   document.getElementById('btnDiscord').addEventListener('click', () => openModal('modalDiscord'));
   initEditModal();
   initSearch();
@@ -192,17 +196,33 @@ function renderCategories(categories) {
   $catNav.appendChild(addBtn);
 }
 
+// ===== New Category Modal =====
+let newCategoryCallback = null;
+
+function openNewCategoryModal(callback) {
+  newCategoryCallback = callback;
+  document.getElementById('inputNewCategory').value = '';
+  openModal('modalNewCategory');
+  setTimeout(() => document.getElementById('inputNewCategory').focus(), 100);
+}
+
+function confirmNewCategory() {
+  const name = document.getElementById('inputNewCategory').value.trim();
+  if (!name) return;
+  closeModal('modalNewCategory');
+  if (newCategoryCallback) newCategoryCallback(name);
+  newCategoryCallback = null;
+}
+
 async function addCategoryFromNav() {
-  const name = prompt('Nome da nova categoria:');
-  if (!name || !name.trim()) return;
-
-  await fetch('/api/categories', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ name: name.trim() })
+  openNewCategoryModal(async (name) => {
+    await fetch('/api/categories', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name })
+    });
+    loadCategories();
   });
-
-  loadCategories();
 }
 
 function setActiveCategory(name) {
@@ -493,18 +513,17 @@ async function populateCategorySelect() {
 }
 
 async function promptNewCategory() {
-  const name = prompt('Nome da nova categoria:');
-  if (!name || !name.trim()) return;
+  openNewCategoryModal(async (name) => {
+    await fetch('/api/categories', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name })
+    });
 
-  await fetch('/api/categories', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ name: name.trim() })
+    await populateCategorySelect();
+    document.getElementById('selectCategory').value = name;
+    loadCategories();
   });
-
-  await populateCategorySelect();
-  document.getElementById('selectCategory').value = name.trim();
-  loadCategories();
 }
 
 function onFileSelected() {

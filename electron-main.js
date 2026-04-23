@@ -1,8 +1,34 @@
 const { app, BrowserWindow, Tray, Menu, nativeImage } = require('electron');
 const path = require('path');
+const fs = require('fs');
 
 let mainWindow = null;
 let tray = null;
+
+// ---------------------------------------------------------------------------
+// Load .env bundled as extraResource — only sets vars that aren't already set
+// ---------------------------------------------------------------------------
+function loadBundledEnv() {
+  const envPaths = [
+    path.join(process.resourcesPath, '.env'),  // packaged build
+    path.join(__dirname, '.env')                // dev (electron .)
+  ];
+
+  for (const envPath of envPaths) {
+    if (!fs.existsSync(envPath)) continue;
+    const lines = fs.readFileSync(envPath, 'utf-8').split('\n');
+    for (const line of lines) {
+      const trimmed = line.trim();
+      if (!trimmed || trimmed.startsWith('#')) continue;
+      const idx = trimmed.indexOf('=');
+      if (idx === -1) continue;
+      const key = trimmed.slice(0, idx).trim();
+      const value = trimmed.slice(idx + 1).trim();
+      if (!process.env[key]) process.env[key] = value;
+    }
+    break;
+  }
+}
 
 // ---------------------------------------------------------------------------
 // Window
@@ -100,6 +126,10 @@ app.whenReady().then(async () => {
   // packaged install doesn't try to write next to the .exe / .asar.
   process.env.SOUNDBOT_CONFIG_DIR = app.getPath('userData');
 
+  // Load Discord credentials from bundled .env (extraResources)
+  // The .env file is gitignored and embedded at build time — secrets never in source.
+  loadBundledEnv();
+
   // Start the Express + Discord-bot server
   const { startServer } = require('./server');
   await startServer();
@@ -120,12 +150,17 @@ app.on('activate', () => {
   }
 });
 
-app.on('before-quit', async () => {
-  // Gracefully shut down the Discord bot
+app.on('before-quit', async (e) => {
+  if (app._cleanupDone) return;
+  e.preventDefault();
+
   try {
-    const bot = require('./discord-bot');
-    await bot.destroy();
+    const { stopServer } = require('./server');
+    await stopServer();
   } catch {
-    // ignore — bot may not have been initialised
+    // ignore — server/bot may not have been initialised
   }
+
+  app._cleanupDone = true;
+  app.quit();
 });
