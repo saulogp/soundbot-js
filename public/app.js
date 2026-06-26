@@ -479,6 +479,8 @@ function openAddAudioModal() {
   setAddAudioSource('file');
   document.getElementById('inputYoutubeUrl').value = '';
   document.getElementById('inputYoutubeName').value = '';
+  document.getElementById('inputYoutubeStart').value = '';
+  document.getElementById('inputYoutubeEnd').value = '';
   populateCategorySelect();
   openModal('modalAddAudio');
 }
@@ -591,17 +593,19 @@ async function uploadAudio() {
 async function uploadYouTubeAudio() {
   const url = document.getElementById('inputYoutubeUrl').value.trim();
   const name = document.getElementById('inputYoutubeName').value.trim();
+  const start = document.getElementById('inputYoutubeStart').value.trim();
+  const end = document.getElementById('inputYoutubeEnd').value.trim();
   const category = document.getElementById('selectCategory').value;
   if (!url) return;
 
   document.getElementById('btnUpload').disabled = true;
-  document.getElementById('btnUpload').textContent = 'Salvando...';
+  document.getElementById('btnUpload').textContent = 'Baixando...';
 
   try {
     const res = await fetch('/api/audios/youtube', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ category, url, name: name || null })
+      body: JSON.stringify({ category, url, name: name || null, start: start || null, end: end || null })
     });
 
     if (res.ok) {

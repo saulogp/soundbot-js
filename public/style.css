@@ -682,6 +682,20 @@ body {
   flex: 1;
 }
 
+.time-range {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.time-range .input {
+  flex: 1;
+  min-width: 0;
+}
+.time-range span {
+  color: var(--text-muted);
+  font-size: 0.85rem;
+}
+
 .current-dir {
   font-size: 0.8rem;
   color: var(--text-muted);

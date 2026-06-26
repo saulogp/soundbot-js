@@ -5,6 +5,7 @@ const multer = require('multer');
 const path = require('path');
 const fs = require('fs');
 const { spawn } = require('child_process');
+const ffmpegStatic = require('ffmpeg-static');
 const bot = require('./discord-bot');
 const ytdlp = require('./ytdlp');
 
@@ -113,6 +114,24 @@ function loadMetadata(audioDir, category) {
 
 function saveMetadata(audioDir, category, meta) {
   fs.writeFileSync(getMetadataPath(audioDir, category), JSON.stringify(meta, null, 2));
+}
+
+// Parse a timecode string (SS, MM:SS or HH:MM:SS) into seconds. Returns null if invalid.
+function parseTimecode(str) {
+  if (typeof str !== 'string') return null;
+  const trimmed = str.trim();
+  if (!/^\d{1,2}(:\d{2}){0,2}$/.test(trimmed)) return null;
+  const parts = trimmed.split(':').map(Number);
+  return parts.reduce((acc, n) => acc * 60 + n, 0);
+}
+
+// Resolve the directory containing the ffmpeg binary provided by ffmpeg-static.
+// In a packaged Electron app the path points inside app.asar, but the binary is
+// unpacked (asarUnpack in package.json) so we redirect to app.asar.unpacked.
+function ffmpegDir() {
+  if (!ffmpegStatic) return null;
+  const binPath = ffmpegStatic.replace('app.asar', 'app.asar.unpacked');
+  return path.dirname(binPath);
 }
 
 // Validate that a resolved path stays inside the base directory (prevents path traversal)
@@ -438,30 +457,99 @@ app.post('/api/audios', upload.single('audio'), (req, res) => {
   });
 });
 
-// POST /api/audios/youtube — save a YouTube URL as an audio entry in metadata
-app.post('/api/audios/youtube', (req, res) => {
-  const { category, url, name } = req.body;
+// POST /api/audios/youtube — download the audio (optionally trimmed to a section)
+// as a real mp3 file in the category folder, so it behaves like any local audio.
+app.post('/api/audios/youtube', async (req, res) => {
+  const { category, url, name, start, end } = req.body;
   if (!category || !url) return res.status(400).json({ error: 'category e url são obrigatórios' });
 
   const ytRegex = /^(https?:\/\/)?(www\.)?(youtube\.com\/(watch\?v=|shorts\/)|youtu\.be\/|music\.youtube\.com\/watch\?v=)/;
   if (!ytRegex.test(url)) return res.status(400).json({ error: 'URL do YouTube inválida' });
 
+  // Validate the optional section (start/end). Both or neither.
+  let section = null;
+  const hasStart = start != null && String(start).trim() !== '';
+  const hasEnd = end != null && String(end).trim() !== '';
+  if (hasStart || hasEnd) {
+    if (!hasStart || !hasEnd) return res.status(400).json({ error: 'Informe início e fim do trecho' });
+    const s = parseTimecode(start);
+    const e = parseTimecode(end);
+    if (s == null || e == null) return res.status(400).json({ error: 'Trecho inválido (use mm:ss)' });
+    if (e <= s) return res.status(400).json({ error: 'O fim do trecho deve ser maior que o início' });
+    section = `*${String(start).trim()}-${String(end).trim()}`;
+  }
+
   const config = loadConfig();
-  const dir = safePath(config.audioDir, category);
-  if (!dir) return res.status(400).json({ error: 'Categoria inválida' });
-  fs.mkdirSync(dir, { recursive: true });
+  const destDir = safePath(config.audioDir, category);
+  if (!destDir) return res.status(400).json({ error: 'Categoria inválida' });
+  fs.mkdirSync(destDir, { recursive: true });
 
-  // Use a unique key based on video ID or timestamp
-  const key = `yt_${Date.now()}`;
-  const meta = loadMetadata(config.audioDir, category);
-  meta[key] = {
-    display: name || null,
-    youtubeUrl: url,
-    type: 'youtube'
-  };
-  saveMetadata(config.audioDir, category, meta);
+  let ytDlpBin;
+  try {
+    ytDlpBin = await ytdlp.ensure();
+  } catch (err) {
+    console.error('Erro ao preparar yt-dlp:', err.message);
+    return res.status(500).json({ error: 'yt-dlp indisponível (falha ao baixar)' });
+  }
 
-  res.json({ key, category, url });
+  const ffDir = ffmpegDir();
+  const base = (name && name.trim().replace(/[^a-zA-Z0-9_\-\s]/g, '').trim()) || `youtube_${Date.now()}`;
+  const tmpOut = path.join(TEMP_DIR, `${base}.%(ext)s`);
+  const tmpFile = path.join(TEMP_DIR, `${base}.mp3`);
+
+  const args = [
+    '-x', '--audio-format', 'mp3',
+    '--no-playlist', '--no-warnings',
+    '-o', tmpOut
+  ];
+  if (ffDir) args.push('--ffmpeg-location', ffDir);
+  if (section) args.push('--download-sections', section, '--force-keyframes-at-cuts');
+  args.push(url);
+
+  try {
+    await new Promise((resolve, reject) => {
+      const proc = spawn(ytDlpBin, args, { stdio: ['ignore', 'ignore', 'pipe'] });
+      let stderr = '';
+      proc.stderr.on('data', d => { stderr += d.toString(); });
+      proc.on('error', reject);
+      proc.on('close', code => {
+        if (code === 0) resolve();
+        else reject(new Error(stderr.trim() || `yt-dlp saiu com código ${code}`));
+      });
+    });
+  } catch (err) {
+    try { fs.unlinkSync(tmpFile); } catch {}
+    console.error('Erro no download do YouTube:', err.message);
+    return res.status(500).json({ error: 'Falha ao baixar o áudio do YouTube' });
+  }
+
+  if (!fs.existsSync(tmpFile)) {
+    return res.status(500).json({ error: 'Falha ao baixar o áudio do YouTube' });
+  }
+
+  // Move to category folder with a unique filename
+  let filename = `${base}.mp3`;
+  let destPath = safePath(destDir, filename);
+  if (!destPath) { try { fs.unlinkSync(tmpFile); } catch {} return res.status(400).json({ error: 'Nome de arquivo inválido' }); }
+  if (fs.existsSync(destPath)) {
+    filename = `${base}_${Date.now()}.mp3`;
+    destPath = path.join(destDir, filename);
+  }
+  fs.renameSync(tmpFile, destPath);
+
+  // Persist display name if provided
+  if (name && name.trim()) {
+    const meta = loadMetadata(config.audioDir, category);
+    meta[filename] = { ...(meta[filename] || {}), display: name.trim() };
+    saveMetadata(config.audioDir, category, meta);
+  }
+
+  res.json({
+    name: path.basename(filename, '.mp3'),
+    filename,
+    category,
+    url: `/audio-files/${encodeURIComponent(category)}/${encodeURIComponent(filename)}`
+  });
 });
 
 // PUT /api/audios/thumbnail — upload thumbnail for an audio
