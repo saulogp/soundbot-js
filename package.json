@@ -40,9 +40,13 @@
       "electron-main.js",
       "server.js",
       "discord-bot.js",
+      "ytdlp.js",
       "package.json",
       "public/**/*",
       "node_modules/**/*"
+    ],
+    "asarUnpack": [
+      "node_modules/ffmpeg-static/**"
     ],
     "extraResources": [
       {

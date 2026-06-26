@@ -6,6 +6,7 @@ let playbackMode = localStorage.getItem('playbackMode') || 'local';
 let discordStatus = { online: false, username: null, guilds: [] };
 let discordProgressTimer = null;
 let discordStartTime = 0;
+let isAuthed = false;
 
 // ===== DOM =====
 const $grid = document.getElementById('audioGrid');
@@ -22,22 +23,21 @@ const $toastTrack = document.getElementById('toastProgressTrack');
 
 // ===== Auth =====
 async function checkAuth() {
+  const userInfo = document.getElementById('userInfo');
+  const btnLogin = document.getElementById('btnLogin');
+
   try {
     const res = await fetch('/auth/me');
     if (res.status === 401) {
-      document.getElementById('loginScreen').style.display = '';
-      document.querySelector('.app').style.display = 'none';
+      isAuthed = false;
+      userInfo.style.display = 'none';
+      btnLogin.style.display = '';
       return false;
     }
     const data = await res.json();
     window.currentUser = data.user;
+    isAuthed = true;
 
-    // Show app, hide login
-    document.getElementById('loginScreen').style.display = 'none';
-    document.querySelector('.app').style.display = '';
-
-    // Update user display
-    const userInfo = document.getElementById('userInfo');
     const avatar = document.getElementById('userAvatar');
     const userName = document.getElementById('userName');
     if (data.user.avatar) {
@@ -47,25 +47,33 @@ async function checkAuth() {
     }
     userName.textContent = data.user.username;
     userInfo.style.display = 'flex';
-
-    document.getElementById('btnLogout').addEventListener('click', async () => {
-      await fetch('/auth/logout', { method: 'POST' });
-      window.location.reload();
-    });
+    btnLogin.style.display = 'none';
 
     return true;
   } catch {
-    document.getElementById('loginScreen').style.display = '';
-    document.querySelector('.app').style.display = 'none';
+    isAuthed = false;
+    userInfo.style.display = 'none';
+    btnLogin.style.display = '';
     return false;
   }
 }
 
+function requiresDiscordAuth(mode) {
+  return mode === 'discord' || mode === 'both';
+}
+
+function redirectToLogin() {
+  window.location.href = '/auth/discord';
+}
+
 // ===== Init =====
 document.addEventListener('DOMContentLoaded', async () => {
-  // Check auth before anything else
-  const authed = await checkAuth();
-  if (!authed) return;
+  await checkAuth();
+
+  document.getElementById('btnLogout').addEventListener('click', async () => {
+    await fetch('/auth/logout', { method: 'POST' });
+    window.location.reload();
+  });
 
   audioPlayer = $player;
   audioPlayer.addEventListener('ended', () => stopPlaying());
@@ -98,7 +106,13 @@ document.addEventListener('DOMContentLoaded', async () => {
   document.getElementById('inputNewCategory').addEventListener('keydown', e => {
     if (e.key === 'Enter') confirmNewCategory();
   });
-  document.getElementById('btnDiscord').addEventListener('click', () => openModal('modalDiscord'));
+  document.getElementById('btnDiscord').addEventListener('click', () => {
+    if (!isAuthed) {
+      redirectToLogin();
+      return;
+    }
+    openModal('modalDiscord');
+  });
   initEditModal();
   initSearch();
   initSourceToggle();
@@ -915,13 +929,24 @@ async function stopDiscord() {
 
 // ===== Playback Mode =====
 function initPlaybackToggle() {
+  // If saved mode requires auth but user is not logged in, fall back to local
+  if (requiresDiscordAuth(playbackMode) && !isAuthed) {
+    playbackMode = 'local';
+    localStorage.setItem('playbackMode', 'local');
+  }
+
   const toggle = document.getElementById('playbackToggle');
   toggle.querySelectorAll('.toggle-option').forEach(btn => {
     if (btn.dataset.mode === playbackMode) btn.classList.add('active');
     else btn.classList.remove('active');
 
     btn.addEventListener('click', () => {
-      setPlaybackMode(btn.dataset.mode);
+      const mode = btn.dataset.mode;
+      if (requiresDiscordAuth(mode) && !isAuthed) {
+        redirectToLogin();
+        return;
+      }
+      setPlaybackMode(mode);
     });
   });
 }

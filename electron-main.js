@@ -1,4 +1,4 @@
-const { app, BrowserWindow, Tray, Menu, nativeImage } = require('electron');
+const { app, BrowserWindow, Tray, Menu, nativeImage, dialog } = require('electron');
 const path = require('path');
 const fs = require('fs');
 
@@ -132,7 +132,16 @@ app.whenReady().then(async () => {
 
   // Start the Express + Discord-bot server
   const { startServer } = require('./server');
-  await startServer();
+  try {
+    await startServer();
+  } catch (err) {
+    // Most likely the port is already in use — show a clear message and quit
+    // instead of opening a blank window pointing at a dead server.
+    dialog.showErrorBox('Não foi possível iniciar o SoundBot', err.message);
+    app.isQuitting = true;
+    app.quit();
+    return;
+  }
 
   createWindow();
   createTray();

@@ -6,6 +6,7 @@ const path = require('path');
 const fs = require('fs');
 const { spawn } = require('child_process');
 const bot = require('./discord-bot');
+const ytdlp = require('./ytdlp');
 
 const app = express();
 const PORT = 3000;
@@ -220,14 +221,14 @@ app.use('/audio-files', (req, res, next) => {
 });
 
 // GET /api/config — never expose secrets to the frontend
-app.get('/api/config', requireAuth, (_req, res) => {
+app.get('/api/config', (_req, res) => {
   const config = loadConfig();
   const { token, clientSecret, ...safeDiscord } = config.discord || {};
   res.json({ ...config, discord: safeDiscord });
 });
 
 // PUT /api/config/directory
-app.put('/api/config/directory', requireAuth, (req, res) => {
+app.put('/api/config/directory', (req, res) => {
   const { directory } = req.body;
   if (!directory) return res.status(400).json({ error: 'Diretório não informado' });
 
@@ -243,7 +244,7 @@ app.put('/api/config/directory', requireAuth, (req, res) => {
 });
 
 // GET /api/categories
-app.get('/api/categories', requireAuth, (_req, res) => {
+app.get('/api/categories', (_req, res) => {
   const config = loadConfig();
   const audioDir = config.audioDir;
 
@@ -263,7 +264,7 @@ app.get('/api/categories', requireAuth, (_req, res) => {
 });
 
 // POST /api/categories
-app.post('/api/categories', requireAuth, (req, res) => {
+app.post('/api/categories', (req, res) => {
   const { name } = req.body;
   if (!name || !name.trim()) return res.status(400).json({ error: 'Nome da categoria é obrigatório' });
 
@@ -275,7 +276,7 @@ app.post('/api/categories', requireAuth, (req, res) => {
 });
 
 // GET /api/audios?category=X  ("Geral" returns all audios from all categories)
-app.get('/api/audios', requireAuth, (req, res) => {
+app.get('/api/audios', (req, res) => {
   const config = loadConfig();
   const category = req.query.category || 'Geral';
   const audioDir = config.audioDir;
@@ -348,7 +349,7 @@ app.get('/api/audios', requireAuth, (req, res) => {
 });
 
 // GET /api/audios/search?q=term — fuzzy search across all categories
-app.get('/api/audios/search', requireAuth, (req, res) => {
+app.get('/api/audios/search', (req, res) => {
   const query = (req.query.q || '').toLowerCase().trim();
   if (!query) return res.json([]);
 
@@ -415,7 +416,7 @@ app.get('/api/audios/search', requireAuth, (req, res) => {
 });
 
 // POST /api/audios — upload, then move from temp to correct category folder
-app.post('/api/audios', requireAuth, upload.single('audio'), (req, res) => {
+app.post('/api/audios', upload.single('audio'), (req, res) => {
   if (!req.file) return res.status(400).json({ error: 'Arquivo de áudio inválido' });
 
   const config = loadConfig();
@@ -438,7 +439,7 @@ app.post('/api/audios', requireAuth, upload.single('audio'), (req, res) => {
 });
 
 // POST /api/audios/youtube — save a YouTube URL as an audio entry in metadata
-app.post('/api/audios/youtube', requireAuth, (req, res) => {
+app.post('/api/audios/youtube', (req, res) => {
   const { category, url, name } = req.body;
   if (!category || !url) return res.status(400).json({ error: 'category e url são obrigatórios' });
 
@@ -464,7 +465,7 @@ app.post('/api/audios/youtube', requireAuth, (req, res) => {
 });
 
 // PUT /api/audios/thumbnail — upload thumbnail for an audio
-app.put('/api/audios/thumbnail', requireAuth, thumbUpload.single('thumbnail'), (req, res) => {
+app.put('/api/audios/thumbnail', thumbUpload.single('thumbnail'), (req, res) => {
   if (!req.file) return res.status(400).json({ error: 'Imagem inválida' });
 
   const config = loadConfig();
@@ -500,7 +501,7 @@ app.put('/api/audios/thumbnail', requireAuth, thumbUpload.single('thumbnail'), (
 });
 
 // PUT /api/audios/display — update display name for an audio
-app.put('/api/audios/display', requireAuth, (req, res) => {
+app.put('/api/audios/display', (req, res) => {
   const { category, filename, display } = req.body;
   if (!category || !filename) return res.status(400).json({ error: 'Categoria e arquivo são obrigatórios' });
 
@@ -523,7 +524,7 @@ app.put('/api/audios/display', requireAuth, (req, res) => {
 });
 
 // PUT /api/audios/move — move audio from one category to another
-app.put('/api/audios/move', requireAuth, (req, res) => {
+app.put('/api/audios/move', (req, res) => {
   const { category, filename, targetCategory } = req.body;
   if (!category || !filename || !targetCategory) return res.status(400).json({ error: 'Dados insuficientes' });
   if (category === targetCategory) return res.json({ moved: false });
@@ -592,7 +593,7 @@ app.put('/api/audios/move', requireAuth, (req, res) => {
 });
 
 // DELETE /api/audios
-app.delete('/api/audios', requireAuth, (req, res) => {
+app.delete('/api/audios', (req, res) => {
   const { category, filename } = req.body;
   if (!category || !filename) return res.status(400).json({ error: 'Dados insuficientes' });
 
@@ -705,7 +706,7 @@ app.post('/api/discord/play', requireAuth, (req, res) => {
 });
 
 // POST /api/discord/play-youtube
-app.post('/api/discord/play-youtube', requireAuth, (req, res) => {
+app.post('/api/discord/play-youtube', requireAuth, async (req, res) => {
   const { url } = req.body;
   if (!url) return res.status(400).json({ error: 'URL é obrigatória' });
 
@@ -717,6 +718,7 @@ app.post('/api/discord/play-youtube', requireAuth, (req, res) => {
   if (!guildId) return res.status(400).json({ error: 'guildId não informado e sem padrão configurado' });
 
   try {
+    await ytdlp.ensure();
     res.json(bot.playYouTube(guildId, url));
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -724,14 +726,22 @@ app.post('/api/discord/play-youtube', requireAuth, (req, res) => {
 });
 
 // GET /api/youtube/stream?url=...
-app.get('/api/youtube/stream', requireAuth, (req, res) => {
+app.get('/api/youtube/stream', async (req, res) => {
   const url = req.query.url;
   if (!url) return res.status(400).json({ error: 'URL é obrigatória' });
 
   const ytRegex = /^(https?:\/\/)?(www\.)?(youtube\.com\/(watch\?v=|shorts\/)|youtu\.be\/|music\.youtube\.com\/watch\?v=)/;
   if (!ytRegex.test(url)) return res.status(400).json({ error: 'URL do YouTube inválida' });
 
-  const ytdlp = spawn('yt-dlp', [
+  let ytDlpBin;
+  try {
+    ytDlpBin = await ytdlp.ensure();
+  } catch (err) {
+    console.error('Erro ao preparar yt-dlp:', err.message);
+    return res.status(500).json({ error: 'yt-dlp indisponível (falha ao baixar)' });
+  }
+
+  const ytProc = spawn(ytDlpBin, [
     '-f', 'bestaudio',
     '-o', '-',
     '--no-playlist',
@@ -743,19 +753,19 @@ app.get('/api/youtube/stream', requireAuth, (req, res) => {
   res.setHeader('Content-Type', 'audio/webm');
   res.setHeader('Transfer-Encoding', 'chunked');
 
-  ytdlp.stdout.pipe(res);
+  ytProc.stdout.pipe(res);
 
-  ytdlp.on('error', (err) => {
+  ytProc.on('error', (err) => {
     console.error('yt-dlp stream error:', err.message);
     if (!res.headersSent) res.status(500).json({ error: 'Erro ao iniciar yt-dlp' });
   });
 
-  ytdlp.stderr.on('data', (data) => {
+  ytProc.stderr.on('data', (data) => {
     console.error('yt-dlp stderr:', data.toString());
   });
 
   res.on('close', () => {
-    if (!ytdlp.killed) ytdlp.kill();
+    if (!ytProc.killed) ytProc.kill();
   });
 });
 
@@ -775,9 +785,13 @@ app.post('/api/discord/stop', requireAuth, (req, res) => {
 let httpServer = null;
 
 async function startServer() {
-  return new Promise((resolve) => {
+  return new Promise((resolve, reject) => {
     httpServer = app.listen(PORT, async () => {
       console.log(`🎵 SoundBot rodando em http://localhost:${PORT}`);
+
+      // Pre-fetch yt-dlp in the background so the first YouTube action is fast.
+      // Errors are non-fatal — routes retry the download on demand.
+      ytdlp.ensure().catch(err => console.error('yt-dlp não pôde ser preparado:', err.message));
 
       // Auto-init Discord bot if token exists
       const config = loadConfig();
@@ -790,6 +804,15 @@ async function startServer() {
       }
 
       resolve(httpServer);
+    });
+
+    // Port conflict (and other listen errors) — reject so the Electron main
+    // process can surface a clear message instead of a blank window.
+    httpServer.on('error', (err) => {
+      if (err.code === 'EADDRINUSE') {
+        err.message = `A porta ${PORT} já está em uso. Feche o programa que a está ocupando e abra o SoundBot novamente.`;
+      }
+      reject(err);
     });
   });
 }

@@ -10,6 +10,7 @@ const {
   StreamType
 } = require('@discordjs/voice');
 const { spawn } = require('child_process');
+const ytdlp = require('./ytdlp');
 
 let client = null;
 const connections = new Map(); // guildId -> VoiceConnection
@@ -180,7 +181,7 @@ function playYouTube(guildId, url) {
   // Kill any existing yt-dlp process for this guild
   killYtProcess(guildId);
 
-  const ytdlp = spawn('yt-dlp', [
+  const ytProc = spawn(ytdlp.getPath(), [
     '-f', 'bestaudio',
     '-o', '-',
     '--no-playlist',
@@ -189,18 +190,18 @@ function playYouTube(guildId, url) {
     url
   ], { stdio: ['ignore', 'pipe', 'pipe'] });
 
-  ytProcesses.set(guildId, ytdlp);
+  ytProcesses.set(guildId, ytProc);
 
-  ytdlp.on('error', (err) => {
+  ytProc.on('error', (err) => {
     console.error(`Erro ao iniciar yt-dlp [${guildId}]:`, err.message);
     ytProcesses.delete(guildId);
   });
 
-  ytdlp.stderr.on('data', (data) => {
+  ytProc.stderr.on('data', (data) => {
     console.error(`yt-dlp stderr [${guildId}]:`, data.toString());
   });
 
-  ytdlp.on('close', () => {
+  ytProc.on('close', () => {
     ytProcesses.delete(guildId);
   });
 
@@ -218,7 +219,7 @@ function playYouTube(guildId, url) {
     conn.subscribe(player);
   }
 
-  const resource = createAudioResource(ytdlp.stdout, {
+  const resource = createAudioResource(ytProc.stdout, {
     inputType: StreamType.Arbitrary
   });
   player.play(resource);
