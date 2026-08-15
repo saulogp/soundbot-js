@@ -74,12 +74,17 @@ soundbot/
 | POST   | `/api/discord/leave`       | Sai do canal de voz                |
 | POST   | `/api/discord/play`        | Toca audio local no Discord        |
 | POST   | `/api/discord/play-youtube`| Toca YouTube no Discord            |
+| POST   | `/api/discord/play-playlist`| Toca musica/playlist YouTube (bg) |
+| POST   | `/api/discord/playlist/next`| Pula para a proxima da playlist   |
+| POST   | `/api/discord/playlist/prev`| Volta para a anterior da playlist |
 | GET    | `/api/youtube/stream`      | Stream de audio YouTube p/ browser |
 | POST   | `/api/discord/stop`        | Para reproducao no Discord         |
 
 ### `discord-bot.js` — Bot Discord
 
-- State em Maps por `guildId`: `connections`, `players`, `ytProcesses`
+- State em Maps por `guildId`: `connections`, `players`, `ytProcesses`, `queues`
+- `playPlaylist(guildId, items, { loop, shuffle })` — fila de background: toca `[{url,title}]` em sequencia, avancando no evento `Idle` do player. `loop` reinicia ao fim; `shuffle` embaralha na entrada. Playlist expandida em `server.js` via `yt-dlp --flat-playlist -J`.
+- `nextTrack` / `prevTrack(guildId)` — pulo manual na fila (respeitam `loop`). O avanco automatico ocorre so no evento `Idle` para evitar pulo duplo quando um video falha.
 - `init(token)` — cria Client, faz login, resolve quando ready
 - `joinChannel` / `leaveChannel` — gerencia VoiceConnection com auto-reconnect
 - `playAudio(guildId, filePath)` — cria AudioResource de arquivo local

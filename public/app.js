@@ -1,4 +1,4 @@
-// ===== State =====
+
 let currentCategory = null;
 let audioPlayer = null;
 let playingCard = null;
@@ -7,21 +7,24 @@ let discordStatus = { online: false, username: null, guilds: [] };
 let discordProgressTimer = null;
 let discordStartTime = 0;
 let isAuthed = false;
+let playlistInfo = null;        
+let playlistPollTimer = null;
+let playlistOrder = 'order';    
 
-// ===== DOM =====
+
 const $grid = document.getElementById('audioGrid');
 const $empty = document.getElementById('emptyState');
 const $catNav = document.getElementById('categoriesNav');
 const $player = document.getElementById('audioPlayer');
 
-// Toast DOM
+
 const $toast = document.getElementById('toastPlayer');
 const $toastName = document.getElementById('toastName');
 const $toastTime = document.getElementById('toastTime');
 const $toastBar = document.getElementById('toastProgressBar');
 const $toastTrack = document.getElementById('toastProgressTrack');
 
-// ===== Auth =====
+
 async function checkAuth() {
   const userInfo = document.getElementById('userInfo');
   const btnLogin = document.getElementById('btnLogin');
@@ -66,7 +69,7 @@ function redirectToLogin() {
   window.location.href = '/auth/discord';
 }
 
-// ===== Init =====
+
 document.addEventListener('DOMContentLoaded', async () => {
   await checkAuth();
 
@@ -79,7 +82,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   audioPlayer.addEventListener('ended', () => stopPlaying());
   audioPlayer.addEventListener('timeupdate', updateToastProgress);
 
-  // Click on progress bar to seek
+  
   $toastTrack.addEventListener('click', e => {
     if (!audioPlayer.duration) return;
     const rect = $toastTrack.getBoundingClientRect();
@@ -87,7 +90,15 @@ document.addEventListener('DOMContentLoaded', async () => {
     audioPlayer.currentTime = ratio * audioPlayer.duration;
   });
 
-  document.getElementById('toastClose').addEventListener('click', () => stopPlaying());
+  document.getElementById('toastClose').addEventListener('click', () => {
+    
+    if (playingCard) stopPlaying();
+    else if (playlistInfo) stopPlaylist();
+    else stopPlaying();
+  });
+
+  document.getElementById('toastPrev').addEventListener('click', () => changePlaylistTrack('prev'));
+  document.getElementById('toastNext').addEventListener('click', () => changePlaylistTrack('next'));
 
   loadConfig();
   loadCategories();
@@ -96,7 +107,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   initPlaybackToggle();
   initDiscordModal();
 
-  // Button listeners
+  
   document.getElementById('btnDirectory').addEventListener('click', openDirectoryModal);
   document.getElementById('btnAddAudio').addEventListener('click', openAddAudioModal);
   document.getElementById('btnSaveDirectory').addEventListener('click', saveDirectory);
@@ -113,11 +124,19 @@ document.addEventListener('DOMContentLoaded', async () => {
     }
     openModal('modalDiscord');
   });
+  document.getElementById('btnPlaylist').addEventListener('click', () => {
+    if (!isAuthed) {
+      redirectToLogin();
+      return;
+    }
+    openPlaylistModal();
+  });
+  initPlaylistModal();
   initEditModal();
   initSearch();
   initSourceToggle();
 
-  // Upload area interactions
+  
   const uploadArea = document.getElementById('uploadArea');
   const fileInput = document.getElementById('inputAudioFile');
 
@@ -134,28 +153,28 @@ document.addEventListener('DOMContentLoaded', async () => {
   });
   fileInput.addEventListener('change', onFileSelected);
 
-  // Close modals on overlay click
+  
   document.querySelectorAll('.modal-overlay').forEach(overlay => {
     overlay.addEventListener('click', e => {
       if (e.target === overlay) overlay.style.display = 'none';
     });
   });
 
-  // Close modal buttons (data-close attribute)
+  
   document.querySelectorAll('[data-close]').forEach(btn => {
     btn.addEventListener('click', () => closeModal(btn.dataset.close));
   });
 
-  // Empty state "add first audio" button
+  
   document.getElementById('btnAddFirstAudio').addEventListener('click', () => {
     document.getElementById('btnAddAudio').click();
   });
 
-  // Clear file button
+  
   document.getElementById('btnClearFile').addEventListener('click', clearFile);
 });
 
-// ===== API Calls =====
+
 async function loadConfig() {
   const res = await fetch('/api/config');
   const config = await res.json();
@@ -181,7 +200,7 @@ async function loadAudios(category) {
   renderAudioGrid(audios);
 }
 
-// ===== Renderers =====
+
 function renderCategories(categories) {
   $catNav.innerHTML = '';
   categories.forEach(cat => {
@@ -189,7 +208,7 @@ function renderCategories(categories) {
     btn.className = 'category-tab';
     btn.textContent = cat;
     btn.addEventListener('click', () => {
-      // Clear search
+      
       const searchInput = document.getElementById('inputSearch');
       if (searchInput) searchInput.value = '';
       document.querySelectorAll('.category-tab').forEach(t => t.disabled = false);
@@ -201,7 +220,7 @@ function renderCategories(categories) {
     $catNav.appendChild(btn);
   });
 
-  // Add new category button
+  
   const addBtn = document.createElement('button');
   addBtn.className = 'category-tab category-add-btn';
   addBtn.title = 'Nova categoria';
@@ -210,7 +229,7 @@ function renderCategories(categories) {
   $catNav.appendChild(addBtn);
 }
 
-// ===== New Category Modal =====
+
 let newCategoryCallback = null;
 
 function openNewCategoryModal(callback) {
@@ -314,7 +333,7 @@ function renderAudioGrid(audios) {
   });
 }
 
-// ===== Audio Playback =====
+
 function togglePlay(card, url) {
   if (playingCard === card) {
     stopPlaying();
@@ -338,7 +357,7 @@ function togglePlay(card, url) {
     playInDiscord(category, filename);
   }
 
-  // For discord-only mode, load audio metadata for duration and simulate progress
+  
   if (playbackMode === 'discord') {
     audioPlayer.src = url;
     audioPlayer.addEventListener('loadedmetadata', function onMeta() {
@@ -371,14 +390,14 @@ function togglePlayYouTube(card, youtubeUrl, name) {
   playingCard = card;
   card.classList.add('playing');
 
-  // Browser playback (local or both)
+  
   if (playbackMode === 'local' || playbackMode === 'both') {
     const streamUrl = '/api/youtube/stream?url=' + encodeURIComponent(youtubeUrl);
     audioPlayer.src = streamUrl;
     audioPlayer.play();
   }
 
-  // Discord playback (discord or both)
+  
   if (playbackMode === 'discord' || playbackMode === 'both') {
     fetch('/api/discord/play-youtube', {
       method: 'POST',
@@ -411,6 +430,7 @@ function stopPlaying() {
 }
 
 function showToast(name) {
+  $toast.classList.remove('playlist-mode');
   $toastName.textContent = name;
   $toastTime.textContent = '0:00 / 0:00';
   $toastBar.style.width = '0%';
@@ -434,7 +454,7 @@ function formatTime(sec) {
   return `${m}:${s.toString().padStart(2, '0')}`;
 }
 
-// ===== Delete Audio =====
+
 async function deleteAudio(audio) {
   if (!confirm(`Remover "${audio.name}"?`)) return;
 
@@ -447,7 +467,7 @@ async function deleteAudio(audio) {
   loadAudios(currentCategory);
 }
 
-// ===== Directory Modal =====
+
 function openDirectoryModal() {
   loadConfig();
   openModal('modalDirectory');
@@ -471,8 +491,8 @@ async function saveDirectory() {
   }
 }
 
-// ===== Add Audio Modal =====
-let addAudioSource = 'file'; // 'file' or 'youtube'
+
+let addAudioSource = 'file'; 
 
 function openAddAudioModal() {
   clearFile();
@@ -481,6 +501,8 @@ function openAddAudioModal() {
   document.getElementById('inputYoutubeName').value = '';
   document.getElementById('inputYoutubeStart').value = '';
   document.getElementById('inputYoutubeEnd').value = '';
+  document.getElementById('inputYoutubeDownload').checked = true;
+  updateYoutubeDownloadUi();
   populateCategorySelect();
   openModal('modalAddAudio');
 }
@@ -490,12 +512,21 @@ function initSourceToggle() {
     btn.addEventListener('click', () => setAddAudioSource(btn.dataset.source));
   });
 
-  // Enable upload button when YouTube URL is typed
+  
   document.getElementById('inputYoutubeUrl').addEventListener('input', () => {
     if (addAudioSource === 'youtube') {
       document.getElementById('btnUpload').disabled = !document.getElementById('inputYoutubeUrl').value.trim();
     }
   });
+
+  
+  document.getElementById('inputYoutubeDownload').addEventListener('change', updateYoutubeDownloadUi);
+}
+
+
+function updateYoutubeDownloadUi() {
+  const download = document.getElementById('inputYoutubeDownload').checked;
+  document.getElementById('youtubeSectionArea').style.display = download ? '' : 'none';
 }
 
 function setAddAudioSource(source) {
@@ -506,7 +537,7 @@ function setAddAudioSource(source) {
   document.getElementById('fileSourceArea').style.display = source === 'file' ? '' : 'none';
   document.getElementById('youtubeSourceArea').style.display = source === 'youtube' ? '' : 'none';
 
-  // Reset upload button state
+  
   if (source === 'file') {
     document.getElementById('btnUpload').disabled = !document.getElementById('inputAudioFile').files[0];
   } else {
@@ -593,19 +624,20 @@ async function uploadAudio() {
 async function uploadYouTubeAudio() {
   const url = document.getElementById('inputYoutubeUrl').value.trim();
   const name = document.getElementById('inputYoutubeName').value.trim();
-  const start = document.getElementById('inputYoutubeStart').value.trim();
-  const end = document.getElementById('inputYoutubeEnd').value.trim();
+  const download = document.getElementById('inputYoutubeDownload').checked;
+  const start = download ? document.getElementById('inputYoutubeStart').value.trim() : '';
+  const end = download ? document.getElementById('inputYoutubeEnd').value.trim() : '';
   const category = document.getElementById('selectCategory').value;
   if (!url) return;
 
   document.getElementById('btnUpload').disabled = true;
-  document.getElementById('btnUpload').textContent = 'Baixando...';
+  document.getElementById('btnUpload').textContent = download ? 'Baixando...' : 'Salvando...';
 
   try {
     const res = await fetch('/api/audios/youtube', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ category, url, name: name || null, start: start || null, end: end || null })
+      body: JSON.stringify({ category, url, name: name || null, download, start: start || null, end: end || null })
     });
 
     if (res.ok) {
@@ -626,18 +658,18 @@ async function uploadYouTubeAudio() {
   document.getElementById('btnUpload').disabled = false;
 }
 
-// ===== Edit Audio Modal =====
+
 let editingAudio = null;
 
 async function openEditModal(audio) {
   editingAudio = audio;
   document.getElementById('editAudioName').textContent = audio.name;
 
-  // Display name
+  
   const displayInput = document.getElementById('inputDisplayName');
   displayInput.value = audio.display || '';
 
-  // Populate category select
+  
   const res = await fetch('/api/categories');
   const categories = await res.json();
   const select = document.getElementById('selectEditCategory');
@@ -675,7 +707,7 @@ function initEditModal() {
     const file = thumbInput.files[0];
     if (!file) return;
 
-    // Preview
+    
     const reader = new FileReader();
     reader.onload = e => {
       const img = document.getElementById('thumbImg');
@@ -698,7 +730,7 @@ async function saveEdit() {
 
   let activeCategory = editingAudio.category;
 
-  // Save display name
+  
   const displayName = document.getElementById('inputDisplayName').value;
   await fetch('/api/audios/display', {
     method: 'PUT',
@@ -710,7 +742,7 @@ async function saveEdit() {
     })
   });
 
-  // Save thumbnail if a new file was selected
+  
   const file = document.getElementById('inputThumbFile').files[0];
   if (file) {
     const formData = new FormData();
@@ -720,7 +752,7 @@ async function saveEdit() {
     await fetch('/api/audios/thumbnail', { method: 'PUT', body: formData });
   }
 
-  // Move to another category if changed
+  
   const targetCategory = document.getElementById('selectEditCategory').value;
   if (targetCategory && targetCategory !== activeCategory) {
     await fetch('/api/audios/move', {
@@ -741,7 +773,7 @@ async function saveEdit() {
   document.getElementById('btnSaveThumb').disabled = false;
 }
 
-// ===== Search =====
+
 let searchTimeout = null;
 
 function initSearch() {
@@ -755,14 +787,14 @@ function initSearch() {
 async function performSearch(query) {
   const trimmed = query.trim();
   if (!trimmed) {
-    // Clear search — reload current category
+    
     document.querySelectorAll('.category-tab').forEach(t => t.disabled = false);
     setActiveCategory(currentCategory);
     loadAudios(currentCategory);
     return;
   }
 
-  // Visual feedback: deselect category tabs
+  
   document.querySelectorAll('.category-tab').forEach(t => {
     t.classList.remove('active');
     t.disabled = true;
@@ -774,7 +806,7 @@ async function performSearch(query) {
   renderAudioGrid(audios);
 }
 
-// ===== Modal Helpers =====
+
 function openModal(id) {
   document.getElementById(id).style.display = 'flex';
 }
@@ -783,7 +815,7 @@ function closeModal(id) {
   document.getElementById(id).style.display = 'none';
 }
 
-// ===== Discord Integration =====
+
 async function loadDiscordStatus() {
   try {
     const res = await fetch('/api/discord/status');
@@ -791,6 +823,7 @@ async function loadDiscordStatus() {
     discordStatus = await res.json();
     renderDiscordIndicator();
     renderDiscordModal();
+    updatePlaylistFromStatus();
   } catch {}
 }
 
@@ -826,7 +859,7 @@ function renderDiscordModal() {
     statusText.textContent = `Conectado como ${discordStatus.username}`;
     onlineSection.style.display = '';
 
-    // Populate guilds
+    
     const guildSelect = document.getElementById('selectGuild');
     guildSelect.innerHTML = '';
     discordStatus.guilds.forEach(g => {
@@ -931,9 +964,165 @@ async function stopDiscord() {
   } catch {}
 }
 
-// ===== Playback Mode =====
+
+function openPlaylistModal() {
+  document.getElementById('inputPlaylistUrl').value = '';
+  document.getElementById('inputPlaylistLoop').checked = false;
+  setPlaylistOrder('order');
+  openModal('modalPlaylist');
+  setTimeout(() => document.getElementById('inputPlaylistUrl').focus(), 100);
+}
+
+function initPlaylistModal() {
+  document.getElementById('playlistOrderToggle').querySelectorAll('.source-option').forEach(btn => {
+    btn.addEventListener('click', () => setPlaylistOrder(btn.dataset.order));
+  });
+  document.getElementById('btnPlayPlaylist').addEventListener('click', startPlaylist);
+  document.getElementById('inputPlaylistUrl').addEventListener('keydown', e => {
+    if (e.key === 'Enter') startPlaylist();
+  });
+}
+
+function setPlaylistOrder(order) {
+  playlistOrder = order;
+  document.querySelectorAll('#playlistOrderToggle .source-option').forEach(btn => {
+    btn.classList.toggle('active', btn.dataset.order === order);
+  });
+}
+
+async function startPlaylist() {
+  const url = document.getElementById('inputPlaylistUrl').value.trim();
+  if (!url) return;
+  const loop = document.getElementById('inputPlaylistLoop').checked;
+  const shuffle = playlistOrder === 'shuffle';
+
+  const btn = document.getElementById('btnPlayPlaylist');
+  btn.disabled = true;
+  btn.textContent = 'Carregando...';
+
+  try {
+    const res = await fetch('/api/discord/play-playlist', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ url, loop, shuffle })
+    });
+    const data = await res.json();
+    if (res.ok) {
+      closeModal('modalPlaylist');
+      
+      clearBrowserPlayback();
+      
+      playlistInfo = { active: true, index: 0, total: data.total, title: data.title, loop, shuffle };
+      renderPlaylistToast();
+      startPlaylistPoll();
+      loadDiscordStatus();
+    } else {
+      alert(data.error || 'Erro ao tocar a playlist');
+    }
+  } catch (err) {
+    console.error('Playlist error:', err);
+    alert('Erro ao tocar a playlist');
+  }
+
+  btn.textContent = 'Tocar';
+  btn.disabled = false;
+}
+
+
+function clearBrowserPlayback() {
+  if (playingCard) {
+    playingCard.classList.remove('playing');
+    playingCard = null;
+  }
+  audioPlayer.pause();
+  audioPlayer.currentTime = 0;
+  if (discordProgressTimer) {
+    clearInterval(discordProgressTimer);
+    discordProgressTimer = null;
+  }
+}
+
+function renderPlaylistToast() {
+  if (!playlistInfo) return;
+  const single = playlistInfo.total <= 1;
+  $toastName.textContent = playlistInfo.title || (single ? 'YouTube' : 'Playlist');
+  const flags = [];
+  if (!single) flags.push(`${(playlistInfo.index || 0) + 1}/${playlistInfo.total}`);
+  if (playlistInfo.shuffle && !single) flags.push('embaralhado');
+  if (playlistInfo.loop) flags.push('loop');
+  $toastTime.textContent = flags.join(' · ');
+  $toast.classList.toggle('single-track', single);
+  $toast.classList.add('playlist-mode', 'visible');
+}
+
+function startPlaylistPoll() {
+  if (playlistPollTimer) return;
+  playlistPollTimer = setInterval(loadDiscordStatus, 5000);
+}
+
+function stopPlaylistPoll() {
+  if (playlistPollTimer) {
+    clearInterval(playlistPollTimer);
+    playlistPollTimer = null;
+  }
+}
+
+async function stopPlaylist() {
+  playlistInfo = null;
+  stopPlaylistPoll();
+  $toast.classList.remove('playlist-mode');
+  hideToast();
+  try {
+    await fetch('/api/discord/stop', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({})
+    });
+  } catch {}
+}
+
+
+async function changePlaylistTrack(direction) {
+  if (!playlistInfo) return;
+  try {
+    const res = await fetch(`/api/discord/playlist/${direction}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({})
+    });
+    if (!res.ok) return;
+    const data = await res.json();
+    
+    if (data.ended || data.skipped === false) {
+      loadDiscordStatus();
+      return;
+    }
+    
+    playlistInfo = { ...playlistInfo, index: data.index, total: data.total, title: data.title };
+    renderPlaylistToast();
+  } catch (err) {
+    console.error('Playlist skip error:', err);
+  }
+}
+
+
+function updatePlaylistFromStatus() {
+  const guild = (discordStatus.guilds || []).find(g => g.playlist && g.playlist.active);
+  if (guild) {
+    playlistInfo = { active: true, ...guild.playlist };
+    startPlaylistPoll();
+    if (!playingCard) renderPlaylistToast();
+  } else if (playlistInfo) {
+    playlistInfo = null;
+    stopPlaylistPoll();
+    $toast.classList.remove('playlist-mode');
+    if (!playingCard) hideToast();
+  }
+}
+
+
 function initPlaybackToggle() {
-  // If saved mode requires auth but user is not logged in, fall back to local
+  
   if (requiresDiscordAuth(playbackMode) && !isAuthed) {
     playbackMode = 'local';
     localStorage.setItem('playbackMode', 'local');
@@ -964,9 +1153,10 @@ function setPlaybackMode(mode) {
 }
 
 
-// ===== Utilities =====
+
 function escapeHtml(str) {
   const div = document.createElement('div');
   div.textContent = str;
   return div.innerHTML;
 }
+

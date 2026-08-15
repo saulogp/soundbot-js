@@ -1,4 +1,4 @@
-/* ===== Reset & Base ===== */
+
 *, *::before, *::after {
   margin: 0;
   padding: 0;
@@ -30,14 +30,14 @@ body {
   line-height: 1.5;
 }
 
-/* ===== App Layout ===== */
+
 .app {
   max-width: 1200px;
   margin: 0 auto;
   padding: 0 24px;
 }
 
-/* ===== Header ===== */
+
 .header {
   display: flex;
   align-items: center;
@@ -72,7 +72,7 @@ body {
   gap: 10px;
 }
 
-/* ===== Buttons ===== */
+
 .btn {
   display: inline-flex;
   align-items: center;
@@ -138,7 +138,7 @@ body {
   background: rgba(239, 68, 68, 0.1);
 }
 
-/* ===== Playback Toggle ===== */
+
 .playback-toggle {
   display: flex;
   border: 1px solid var(--border);
@@ -168,7 +168,7 @@ body {
   color: white;
 }
 
-/* ===== Discord Button & Status ===== */
+
 .discord-btn {
   gap: 8px;
 }
@@ -210,7 +210,7 @@ body {
   background: var(--success);
 }
 
-/* ===== Categories ===== */
+
 .categories {
   display: flex;
   gap: 6px;
@@ -249,7 +249,7 @@ body {
   line-height: 1;
 }
 
-/* ===== Search Bar ===== */
+
 .search-bar {
   position: relative;
   margin: 12px 0 4px;
@@ -281,7 +281,7 @@ body {
   color: var(--text-muted);
 }
 
-/* ===== Source Toggle (Add Audio Modal) ===== */
+
 .source-toggle {
   display: flex;
   gap: 8px;
@@ -311,7 +311,7 @@ body {
   background: var(--bg);
 }
 
-/* ===== Audio Grid ===== */
+
 .grid-container {
   padding: 8px 0 40px;
 }
@@ -322,7 +322,7 @@ body {
   gap: 14px;
 }
 
-/* ===== Audio Card ===== */
+
 .audio-card {
   position: relative;
   background: var(--surface);
@@ -405,7 +405,7 @@ body {
   background: rgba(239, 68, 68, 0.15);
 }
 
-/* Card thumbnail */
+
 .audio-card .card-thumb {
   width: 56px;
   height: 56px;
@@ -414,7 +414,7 @@ body {
   margin-bottom: 10px;
 }
 
-/* Edit modal styles */
+
 .edit-audio-name {
   font-weight: 600;
   font-size: 1rem;
@@ -459,7 +459,7 @@ body {
   color: var(--primary);
 }
 
-/* ===== Toast Player ===== */
+
 .toast-player {
   position: fixed;
   bottom: 24px;
@@ -529,6 +529,36 @@ body {
   transition: width 100ms linear;
 }
 
+
+.toast-player.playlist-mode .toast-progress-track { display: none; }
+
+
+.toast-controls {
+  display: none;
+  align-items: center;
+  justify-content: center;
+  gap: 20px;
+}
+.toast-player.playlist-mode .toast-controls { display: flex; }
+
+.toast-player.single-track .toast-controls { display: none; }
+.toast-ctrl-btn {
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  cursor: pointer;
+  padding: 4px 10px;
+  border-radius: var(--radius-sm);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all var(--transition);
+}
+.toast-ctrl-btn:hover {
+  color: var(--primary);
+  background: rgba(99, 102, 241, 0.15);
+}
+
 .toast-close {
   position: absolute;
   top: 8px;
@@ -546,7 +576,7 @@ body {
   background: rgba(239, 68, 68, 0.1);
 }
 
-/* Playing animation */
+
 .audio-card.playing .card-icon {
   animation: pulse 1s ease-in-out infinite;
 }
@@ -555,7 +585,7 @@ body {
   50% { transform: scale(1.15); }
 }
 
-/* ===== Empty State ===== */
+
 .empty-state {
   display: flex;
   flex-direction: column;
@@ -574,7 +604,7 @@ body {
   font-size: 1rem;
 }
 
-/* ===== Modals ===== */
+
 .modal-overlay {
   position: fixed;
   inset: 0;
@@ -646,7 +676,7 @@ body {
   margin-bottom: 16px;
 }
 
-/* ===== Inputs ===== */
+
 .input-group {
   margin-bottom: 16px;
 }
@@ -696,6 +726,41 @@ body {
   font-size: 0.85rem;
 }
 
+.yt-download-toggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+  font-size: 0.9rem;
+  margin-bottom: 6px;
+}
+.yt-download-toggle input {
+  width: 16px;
+  height: 16px;
+  accent-color: var(--primary);
+  cursor: pointer;
+}
+.yt-download-hint {
+  color: var(--text-muted);
+  font-size: 0.8rem;
+  margin: 0 0 16px;
+  line-height: 1.4;
+}
+
+
+.input-label-standalone {
+  display: block;
+  font-size: 0.85rem;
+  font-weight: 500;
+  color: var(--text-muted);
+  margin-bottom: 6px;
+}
+.label-note {
+  font-weight: 400;
+  font-size: 0.78rem;
+  opacity: 0.7;
+}
+
 .current-dir {
   font-size: 0.8rem;
   color: var(--text-muted);
@@ -709,7 +774,7 @@ body {
   font-size: 0.78rem;
 }
 
-/* ===== Upload Area ===== */
+
 .upload-area {
   border: 2px dashed var(--border);
   border-radius: var(--radius);
@@ -747,7 +812,7 @@ body {
   font-size: 0.85rem;
 }
 
-/* ===== Responsive ===== */
+
 @media (max-width: 600px) {
   .app { padding: 0 12px; }
   .audio-grid {
@@ -764,7 +829,7 @@ body {
   .user-info span { display: none; }
 }
 
-/* ===== Login Screen ===== */
+
 .login-screen {
   display: flex;
   align-items: center;
@@ -814,7 +879,7 @@ body {
   background: #4752c4;
 }
 
-/* ===== User Info (Header) ===== */
+
 .user-info {
   display: flex;
   align-items: center;

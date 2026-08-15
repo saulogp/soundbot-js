@@ -466,6 +466,33 @@ app.post('/api/audios/youtube', async (req, res) => {
   const ytRegex = /^(https?:\/\/)?(www\.)?(youtube\.com\/(watch\?v=|shorts\/)|youtu\.be\/|music\.youtube\.com\/watch\?v=)/;
   if (!ytRegex.test(url)) return res.status(400).json({ error: 'URL do YouTube inválida' });
 
+  // Download é opcional. Quando desligado, salvamos apenas o link (metadata-only,
+  // chave yt_) e o áudio é transmitido sob demanda no play. Padrão: baixar.
+  const download = req.body.download !== false;
+
+  if (!download) {
+    const config = loadConfig();
+    const catDir = safePath(config.audioDir, category);
+    if (!catDir) return res.status(400).json({ error: 'Categoria inválida' });
+    fs.mkdirSync(catDir, { recursive: true });
+
+    const meta = loadMetadata(config.audioDir, category);
+    const key = `yt_${Date.now()}`;
+    const display = (name && name.trim()) || null;
+    meta[key] = { type: 'youtube', youtubeUrl: url, display };
+    saveMetadata(config.audioDir, category, meta);
+
+    return res.json({
+      name: display || 'YouTube',
+      display,
+      filename: key,
+      category,
+      url: null,
+      youtubeUrl: url,
+      type: 'youtube'
+    });
+  }
+
   // Validate the optional section (start/end). Both or neither.
   let section = null;
   const hasStart = start != null && String(start).trim() !== '';
@@ -812,6 +839,95 @@ app.post('/api/discord/play-youtube', requireAuth, async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
+
+// Expand a YouTube playlist into a flat list of { url, title } using yt-dlp.
+// Uses --flat-playlist so it only reads metadata (fast, no per-video probe).
+function expandPlaylist(ytDlpBin, url) {
+  return new Promise((resolve, reject) => {
+    const proc = spawn(ytDlpBin, ['--flat-playlist', '-J', '--no-warnings', url], {
+      stdio: ['ignore', 'pipe', 'pipe']
+    });
+    let stdout = '';
+    let stderr = '';
+    proc.stdout.on('data', d => { stdout += d.toString(); });
+    proc.stderr.on('data', d => { stderr += d.toString(); });
+    proc.on('error', reject);
+    proc.on('close', code => {
+      if (code !== 0) return reject(new Error(stderr.trim() || `yt-dlp saiu com código ${code}`));
+      try {
+        const data = JSON.parse(stdout);
+        const entries = Array.isArray(data.entries) ? data.entries : [data];
+        const items = entries
+          .filter(e => e && e.id)
+          .map(e => ({ url: `https://www.youtube.com/watch?v=${e.id}`, title: e.title || 'YouTube' }));
+        resolve(items);
+      } catch {
+        reject(new Error('Falha ao interpretar a playlist'));
+      }
+    });
+  });
+}
+
+// POST /api/discord/play-playlist — plays a YouTube song OR playlist as
+// background music. A single-video URL becomes a one-item queue (loop repeats).
+app.post('/api/discord/play-playlist', requireAuth, async (req, res) => {
+  const { url } = req.body;
+  const loop = req.body.loop === true;
+  const shuffle = req.body.shuffle === true;
+  if (!url) return res.status(400).json({ error: 'URL é obrigatória' });
+
+  const ytSingleRegex = /^(https?:\/\/)?(www\.)?(youtube\.com\/(watch\?v=|shorts\/)|youtu\.be\/|music\.youtube\.com\/watch\?v=)/;
+  const ytDomainRegex = /^(https?:\/\/)?(www\.|music\.)?youtube\.com\//;
+  const isPlaylist = ytDomainRegex.test(url) && /[?&]list=[A-Za-z0-9_-]+/.test(url);
+  if (!ytSingleRegex.test(url) && !isPlaylist) {
+    return res.status(400).json({ error: 'URL do YouTube inválida' });
+  }
+
+  const config = loadConfig();
+  const guildId = req.body.guildId || config.discord?.defaultGuildId;
+  if (!guildId) return res.status(400).json({ error: 'guildId não informado e sem padrão configurado' });
+
+  let ytDlpBin;
+  try {
+    ytDlpBin = await ytdlp.ensure();
+  } catch (err) {
+    console.error('Erro ao preparar yt-dlp:', err.message);
+    return res.status(500).json({ error: 'yt-dlp indisponível (falha ao baixar)' });
+  }
+
+  let items;
+  try {
+    items = await expandPlaylist(ytDlpBin, url);
+  } catch (err) {
+    console.error('Erro ao expandir link do YouTube:', err.message);
+    return res.status(500).json({ error: 'Falha ao carregar o link do YouTube' });
+  }
+
+  if (!items.length) return res.status(400).json({ error: 'Nenhum vídeo encontrado no link' });
+  if (items.length > 500) items = items.slice(0, 500);
+
+  try {
+    res.json(bot.playPlaylist(guildId, items, { loop, shuffle }));
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// POST /api/discord/playlist/next | prev — skip within the background playlist
+function playlistSkipHandler(fn) {
+  return (req, res) => {
+    const config = loadConfig();
+    const guildId = req.body.guildId || config.discord?.defaultGuildId;
+    if (!guildId) return res.status(400).json({ error: 'guildId não informado' });
+    try {
+      res.json(fn(guildId));
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
+  };
+}
+app.post('/api/discord/playlist/next', requireAuth, playlistSkipHandler(g => bot.nextTrack(g)));
+app.post('/api/discord/playlist/prev', requireAuth, playlistSkipHandler(g => bot.prevTrack(g)));
 
 // GET /api/youtube/stream?url=...
 app.get('/api/youtube/stream', async (req, res) => {
