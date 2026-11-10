@@ -13,9 +13,13 @@ const { spawn } = require('child_process');
 
 const IS_WIN = process.platform === 'win32';
 const BIN_NAME = IS_WIN ? 'yt-dlp.exe' : 'yt-dlp';
-const DOWNLOAD_URL = IS_WIN
-  ? 'https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp.exe'
-  : 'https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp';
+const RELEASE_URL = 'https://github.com/yt-dlp/yt-dlp/releases/latest/download/';
+// Standalone builds don't need Python installed; the plain `yt-dlp` asset is a
+// zipapp that requires python3 (fallback for other OS/arch combos)
+const LINUX_ASSETS = { x64: 'yt-dlp_linux', arm64: 'yt-dlp_linux_aarch64' };
+const DOWNLOAD_URL = RELEASE_URL + (IS_WIN
+  ? 'yt-dlp.exe'
+  : (process.platform === 'linux' && LINUX_ASSETS[process.arch]) || 'yt-dlp');
 
 function configDir() {
   return process.env.SOUNDBOT_CONFIG_DIR || __dirname;

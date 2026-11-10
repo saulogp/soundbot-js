@@ -39,6 +39,9 @@ npm run build:nsis
 
 # Apenas portable
 npm run build:portable
+
+# Linux (AppImage)
+npm run build:linux
 ```
 
 Os executaveis serao gerados na pasta `dist/`.

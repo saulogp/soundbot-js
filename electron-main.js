@@ -55,8 +55,10 @@ function createWindow() {
   mainWindow.setMenuBarVisibility(false);
 
   mainWindow.on('close', (e) => {
-    // Minimise to tray instead of quitting
-    if (!app.isQuitting) {
+    // Minimise to tray instead of quitting. Not on Linux: many desktops (GNOME
+    // without the AppIndicator extension) show no tray icon, so a hidden
+    // window could never be brought back — closing quits there.
+    if (!app.isQuitting && process.platform !== 'linux') {
       e.preventDefault();
       mainWindow.hide();
     }
@@ -110,12 +112,18 @@ function createTray() {
 // 16x16 transparent PNG so the app never crashes on a missing icon.
 // ---------------------------------------------------------------------------
 function getIcon() {
-  const iconPath = path.join(__dirname, 'assets', 'icon.png');
-  try {
-    return nativeImage.createFromPath(iconPath);
-  } catch {
-    return nativeImage.createEmpty();
+  // assets/ is not inside app.asar — the packaged build ships it as an
+  // extraResource (resources/assets), so look there first
+  const candidates = [
+    process.resourcesPath && path.join(process.resourcesPath, 'assets', 'icon.png'),
+    path.join(__dirname, 'assets', 'icon.png')
+  ].filter(Boolean);
+  for (const iconPath of candidates) {
+    if (!fs.existsSync(iconPath)) continue;
+    const img = nativeImage.createFromPath(iconPath);
+    if (!img.isEmpty()) return img;
   }
+  return nativeImage.createEmpty();
 }
 
 // ---------------------------------------------------------------------------

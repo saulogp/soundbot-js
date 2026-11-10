@@ -70,8 +70,9 @@ npm run electron   # versão desktop (janela + bandeja)
 ```
 Abra o navegador em **http://localhost:3000** (no modo `npm start`).
 
-### 5. (Opcional) Gerar o instalador Windows
+### 5. (Opcional) Gerar o instalador
 ```bash
+npm run build:linux     # AppImage para Linux
 npm run build           # gera instalador NSIS + portable em dist/
 npm run build:portable  # só o portable
 npm run build:nsis      # só o instalador

@@ -99,6 +99,8 @@ soundbot/
 - Janela unica com tray (minimiza ao fechar, double-click restaura)
 - `SOUNDBOT_CONFIG_DIR` → `app.getPath('userData')` para nao escrever ao lado do .exe
 - Graceful shutdown do bot no `before-quit`
+- No Linux fechar a janela encerra o app (bandeja nem sempre existe, ex.: GNOME)
+- Builds passam por `scripts/build.js`, que troca o binario do `ffmpeg-static` pelo do SO alvo em build cruzado e restaura depois
 
 ### `public/app.js` — Frontend
 
@@ -170,6 +172,7 @@ soundbot/
 npm start           # Inicia servidor standalone (porta 3000)
 npm run electron    # Inicia versao desktop
 npm run build       # Build Electron (NSIS + portable) para Windows x64
+npm run build:linux # Build Electron (AppImage) para Linux x64
 ```
 
 ## Notas de Desenvolvimento

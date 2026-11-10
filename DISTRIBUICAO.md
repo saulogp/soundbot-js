@@ -1,6 +1,6 @@
 # Distribuição do SoundBot
 
-Guia para gerar e distribuir o instalador do SoundBot para outras pessoas (Windows x64).
+Guia para gerar e distribuir o SoundBot para outras pessoas (Windows x64 e Linux x64).
 
 ## Como funciona o modelo de distribuição
 
@@ -32,14 +32,22 @@ Guia para gerar e distribuir o instalador do SoundBot para outras pessoas (Windo
 ## Gerar o instalador
 
 ```bash
-npm run build          # gera instalador NSIS + portable em dist/
-npm run build:nsis     # apenas o instalador NSIS
-npm run build:portable # apenas o .exe portátil
+npm run build          # Windows: instalador NSIS + portable em dist/
+npm run build:nsis     # Windows: apenas o instalador NSIS
+npm run build:portable # Windows: apenas o .exe portátil
+npm run build:linux    # Linux: AppImage
 ```
 
 Saída em `dist/`:
 - `SoundBot Setup 1.0.0.exe` — instalador (cria atalhos, permite escolher pasta).
 - `SoundBot 1.0.0.exe` — portátil (roda sem instalar).
+- `SoundBot-1.0.0-x86_64.AppImage` — Linux, roda sem instalar (`chmod +x` e executar).
+
+Os scripts passam por [scripts/build.js](scripts/build.js): o `ffmpeg-static` só guarda o binário
+do sistema que rodou o `npm install`, então num build para outro sistema (ex.: Windows a partir do
+Linux) o script baixa o ffmpeg do sistema alvo, gera o build e depois restaura o ffmpeg local.
+Não chame `electron-builder` direto num build cruzado — o pacote sairia com o ffmpeg errado e
+nenhum áudio tocaria. Build do Windows no Linux usa o `wine` (para aplicar o ícone no `.exe`).
 
 ## Dependências de runtime (já resolvidas — usuário não instala nada)
 
@@ -48,7 +56,8 @@ Saída em `dist/`:
   qualquer áudio (local e YouTube).
 - **yt-dlp**: **não** precisa estar no PATH. Na primeira vez que um recurso de YouTube é usado,
   o app baixa o `yt-dlp.exe` automaticamente para a pasta de dados do usuário
-  (`%APPDATA%/SoundBot/bin/`) — ver [ytdlp.js](ytdlp.js). Se já houver `yt-dlp` no PATH, ele é usado.
+  (`%APPDATA%/SoundBot/bin/`; no Linux `~/.config/SoundBot/bin/`, versão standalone que não exige
+  Python) — ver [ytdlp.js](ytdlp.js). Se já houver `yt-dlp` no PATH, ele é usado.
   - Requer internet na primeira execução do recurso de YouTube.
 
 ## O que o usuário verá ao instalar
@@ -72,4 +81,8 @@ Tudo que o app escreve fica em `%APPDATA%/SoundBot/` (definido por `SOUNDBOT_CON
 
 - **Porta 3000 fixa**: necessária para casar com o `redirectUri` do OAuth. Se a porta estiver
   ocupada, o app mostra um diálogo de erro claro e fecha (em vez de abrir uma janela em branco).
-- **Somente Windows x64**: os targets atuais (`nsis`, `portable`) são apenas para Windows x64.
+- **Somente x64**: Windows (`nsis`, `portable`) e Linux (`AppImage`), sem builds ARM/macOS.
+- **Linux — fechar a janela encerra o app** (no Windows ela vai para a bandeja): vários desktops
+  (GNOME sem a extensão AppIndicator) não mostram ícone na bandeja, e a janela escondida não
+  teria como voltar.
+- **Linux — AppImage precisa de FUSE** (`libfuse2`). Sem ele: `./SoundBot-*.AppImage --appimage-extract-and-run`.
