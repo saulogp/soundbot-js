@@ -162,6 +162,10 @@ app.on('activate', () => {
 app.on('before-quit', async (e) => {
   if (app._cleanupDone) return;
   e.preventDefault();
+  // Quit can come from outside the tray menu (Cmd+Q, OS logout...). Without
+  // this the window's 'close' handler would cancel it and leave the window up
+  // with the server already stopped.
+  app.isQuitting = true;
 
   try {
     const { stopServer } = require('./server');

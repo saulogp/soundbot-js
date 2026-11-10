@@ -16,7 +16,16 @@ let client = null;
 const connections = new Map(); // guildId -> VoiceConnection
 const players = new Map();     // guildId -> AudioPlayer
 const ytProcesses = new Map(); // guildId -> ChildProcess
-const queues = new Map();      // guildId -> { items:[{url,title}], index, loop, shuffle }
+const queues = new Map();      // guildId -> { items:[{url,title}], index, loop, shuffle, failures, reachedPlaying }
+
+// Consecutive tracks that may fail before a playlist is abandoned
+const MAX_QUEUE_FAILURES = 5;
+
+// Error with an HTTP status and a user-facing message; server.js's central
+// error handler answers it as { error } with that status.
+function botError(status, message) {
+  return Object.assign(new Error(message), { status, expose: true });
+}
 
 // Fisher-Yates shuffle (returns a new array)
 function shuffleArray(arr) {
@@ -28,26 +37,38 @@ function shuffleArray(arr) {
   return a;
 }
 
+// Logs in a new client first and only replaces the current one once the new
+// login succeeded — a bad token must not take down a bot that is working.
 async function init(token) {
-  if (client) {
-    await destroy();
-  }
-
-  client = new Client({
+  const next = new Client({
     intents: [
       GatewayIntentBits.Guilds,
       GatewayIntentBits.GuildVoiceStates
     ]
   });
+  // Permanent listener: an 'error' event without one is thrown by
+  // EventEmitter and would crash the process.
+  next.on('error', err => console.error('Erro no client Discord:', err.message));
 
-  return new Promise((resolve, reject) => {
-    client.once('ready', () => {
-      console.log(`Discord bot conectado como ${client.user.tag}`);
-      resolve();
+  let onLoginError;
+  try {
+    await new Promise((resolve, reject) => {
+      onLoginError = reject;
+      next.once('error', onLoginError);
+      next.once('ready', resolve);
+      next.login(token).catch(reject);
     });
-    client.once('error', reject);
-    client.login(token).catch(reject);
-  });
+  } catch (err) {
+    // Don't leave a half-initialized client behind; the current one stays up
+    try { await next.destroy(); } catch {}
+    throw err;
+  } finally {
+    next.off('error', onLoginError);
+  }
+
+  if (client) await destroy();
+  client = next;
+  console.log(`Discord bot conectado como ${client.user.tag}`);
 }
 
 function getStatus() {
@@ -120,20 +141,24 @@ function getStatusForUser(userGuildIds, userId) {
 
 function joinChannel(guildId, channelId) {
   if (!client || !client.isReady()) {
-    throw new Error('Bot não está conectado');
+    throw botError(503, 'Bot não está conectado');
   }
 
   const guild = client.guilds.cache.get(guildId);
-  if (!guild) throw new Error('Servidor não encontrado');
+  if (!guild) throw botError(404, 'Servidor não encontrado');
 
   const channel = guild.channels.cache.get(channelId);
-  if (!channel) throw new Error('Canal não encontrado');
+  if (!channel) throw botError(404, 'Canal não encontrado');
+  if (!channel.isVoiceBased()) throw botError(400, 'O canal escolhido não é de voz');
 
-  // Leave existing connection in this guild
+  // Leave existing connection in this guild. The old player is subscribed to
+  // the old connection, so drop it too — otherwise the next play would go to a
+  // destroyed connection and nothing would be heard after switching channels.
   if (connections.has(guildId)) {
     connections.get(guildId).destroy();
     connections.delete(guildId);
   }
+  dropPlayer(guildId);
 
   const connection = joinVoiceChannel({
     channelId: channel.id,
@@ -150,9 +175,15 @@ function joinChannel(guildId, channelId) {
         entersState(connection, VoiceConnectionStatus.Connecting, 5000)
       ]);
     } catch {
-      connection.destroy();
-      connections.delete(guildId);
-      players.delete(guildId);
+      // leaveChannel/joinChannel may have destroyed it during the wait, and
+      // destroying twice throws (unhandled rejection → process crash)
+      if (connection.state.status !== VoiceConnectionStatus.Destroyed) connection.destroy();
+      // Only clean up if this is still the guild's current connection
+      // (the user may have joined another channel in the meantime).
+      if (connections.get(guildId) === connection) {
+        connections.delete(guildId);
+        dropPlayer(guildId);
+      }
     }
   });
 
@@ -160,14 +191,24 @@ function joinChannel(guildId, channelId) {
   return { joined: true, channelName: channel.name };
 }
 
-function leaveChannel(guildId) {
+// Stop and forget the guild's player, queue and yt-dlp process. A player that
+// is only removed from the Map stays paused in memory (NoSubscriberBehavior.Pause).
+function dropPlayer(guildId) {
   queues.delete(guildId);
   killYtProcess(guildId);
+  const player = players.get(guildId);
+  if (player) {
+    player.stop(true);
+    players.delete(guildId);
+  }
+}
+
+function leaveChannel(guildId) {
+  dropPlayer(guildId);
   const conn = connections.get(guildId);
   if (conn) {
     conn.destroy();
     connections.delete(guildId);
-    players.delete(guildId);
   }
   return { left: true };
 }
@@ -189,8 +230,23 @@ function getOrCreatePlayer(guildId, conn) {
       // double-skip that firing here would cause. Only clean up for single plays.
       if (!queues.has(guildId)) killYtProcess(guildId);
     });
+    player.on(AudioPlayerStatus.Playing, () => {
+      const q = queues.get(guildId);
+      if (q) q.reachedPlaying = true;
+    });
     player.on(AudioPlayerStatus.Idle, () => {
-      if (queues.has(guildId)) advanceQueue(guildId);
+      const q = queues.get(guildId);
+      if (!q) return;
+      // A track that never reached Playing failed (offline, unavailable...).
+      // Stop after several in a row so a looping playlist can't spawn yt-dlp forever.
+      q.failures = q.reachedPlaying ? 0 : q.failures + 1;
+      if (q.failures >= Math.min(MAX_QUEUE_FAILURES, q.items.length)) {
+        console.error(`Playlist encerrada após ${q.failures} falhas seguidas [${guildId}]`);
+        queues.delete(guildId);
+        killYtProcess(guildId);
+        return;
+      }
+      advanceQueue(guildId);
     });
     players.set(guildId, player);
     conn.subscribe(player);
@@ -200,7 +256,7 @@ function getOrCreatePlayer(guildId, conn) {
 
 function playAudio(guildId, filePath) {
   const conn = connections.get(guildId);
-  if (!conn) throw new Error('Bot não está em um canal de voz neste servidor');
+  if (!conn) throw botError(409, 'Bot não está em um canal de voz neste servidor');
 
   // A single audio interrupts any running playlist/stream
   queues.delete(guildId);
@@ -215,7 +271,7 @@ function playAudio(guildId, filePath) {
 
 function playYouTube(guildId, url) {
   const conn = connections.get(guildId);
-  if (!conn) throw new Error('Bot não está em um canal de voz neste servidor');
+  if (!conn) throw botError(409, 'Bot não está em um canal de voz neste servidor');
 
   // A single YouTube play interrupts any running playlist
   queues.delete(guildId);
@@ -226,7 +282,7 @@ function playYouTube(guildId, url) {
 // queue, so it is safe to call both for single plays and for each queue item.
 function playYouTubeUrl(guildId, url) {
   const conn = connections.get(guildId);
-  if (!conn) throw new Error('Bot não está em um canal de voz neste servidor');
+  if (!conn) throw botError(409, 'Bot não está em um canal de voz neste servidor');
 
   // Kill any existing yt-dlp process for this guild
   killYtProcess(guildId);
@@ -237,23 +293,28 @@ function playYouTubeUrl(guildId, url) {
     '--no-playlist',
     '--no-warnings',
     '--quiet',
+    '--',
     url
   ], { stdio: ['ignore', 'pipe', 'pipe'] });
 
   ytProcesses.set(guildId, ytProc);
 
+  // A killed process closes asynchronously, after the next track's process
+  // was already registered — only forget the entry if it is still ours.
+  const forget = () => {
+    if (ytProcesses.get(guildId) === ytProc) ytProcesses.delete(guildId);
+  };
+
   ytProc.on('error', (err) => {
     console.error(`Erro ao iniciar yt-dlp [${guildId}]:`, err.message);
-    ytProcesses.delete(guildId);
+    forget();
   });
 
   ytProc.stderr.on('data', (data) => {
     console.error(`yt-dlp stderr [${guildId}]:`, data.toString());
   });
 
-  ytProc.on('close', () => {
-    ytProcesses.delete(guildId);
-  });
+  ytProc.on('close', forget);
 
   const player = getOrCreatePlayer(guildId, conn);
   const resource = createAudioResource(ytProc.stdout, {
@@ -269,11 +330,11 @@ function playYouTubeUrl(guildId, url) {
 // track end. With loop the queue restarts after the last track.
 function playPlaylist(guildId, items, { loop = false, shuffle = false } = {}) {
   const conn = connections.get(guildId);
-  if (!conn) throw new Error('Bot não está em um canal de voz neste servidor');
-  if (!Array.isArray(items) || items.length === 0) throw new Error('Playlist vazia');
+  if (!conn) throw botError(409, 'Bot não está em um canal de voz neste servidor');
+  if (!Array.isArray(items) || items.length === 0) throw botError(400, 'Playlist vazia');
 
   const ordered = shuffle ? shuffleArray(items) : [...items];
-  queues.set(guildId, { items: ordered, index: 0, loop: !!loop, shuffle: !!shuffle });
+  queues.set(guildId, { items: ordered, index: 0, loop: !!loop, shuffle: !!shuffle, failures: 0, reachedPlaying: false });
 
   playQueueCurrent(guildId);
 
@@ -289,6 +350,7 @@ function playQueueCurrent(guildId) {
   if (!q) return;
   const item = q.items[q.index];
   if (!item) return;
+  q.reachedPlaying = false;
   try {
     playYouTubeUrl(guildId, item.url);
   } catch (err) {

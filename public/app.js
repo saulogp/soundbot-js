@@ -6,6 +6,7 @@ let playbackMode = localStorage.getItem('playbackMode') || 'local';
 let discordStatus = { online: false, username: null, guilds: [] };
 let discordProgressTimer = null;
 let discordStartTime = 0;
+let discordMetaListener = null; // pending 'loadedmetadata' listener of discord mode
 let isAuthed = false;
 let playlistInfo = null;        
 let playlistPollTimer = null;
@@ -65,12 +66,60 @@ function requiresDiscordAuth(mode) {
   return mode === 'discord' || mode === 'both';
 }
 
-function redirectToLogin() {
-  window.location.href = '/auth/discord';
+const $notice = document.getElementById('notice');
+let noticeTimer = null;
+
+function showNotice(message) {
+  $notice.textContent = message;
+  $notice.classList.add('visible');
+  clearTimeout(noticeTimer);
+  noticeTimer = setTimeout(() => $notice.classList.remove('visible'), 4000);
+}
+
+// Only the "Login Discord" button starts the OAuth flow. Other actions that
+// need a session just explain how to get one.
+function notifyLoginRequired(action = 'usar esta função') {
+  showNotice(`Entre com o botão "Login Discord" para ${action}.`);
+}
+
+// Managing the library requires login; listening in the browser does not.
+function withLogin(fn, action = 'gerenciar a biblioteca') {
+  return (...args) => {
+    if (!isAuthed) {
+      notifyLoginRequired(action);
+      return;
+    }
+    return fn(...args);
+  };
+}
+
+// Show the server's { error } message for a failed request.
+async function reportError(res, fallback) {
+  let message = fallback;
+  try { message = (await res.json()).error || fallback; } catch {}
+  if (res.status === 401) {
+    // Session expired (e.g. server restarted) — reflect it in the UI
+    await checkAuth();
+    notifyLoginRequired('continuar');
+    return;
+  }
+  alert(message);
 }
 
 
 document.addEventListener('DOMContentLoaded', async () => {
+  // OAuth callback rejected the account (not in allowedUserIds)
+  const params = new URLSearchParams(window.location.search);
+  const loginErrors = {
+    'sem-permissao': 'Sua conta do Discord não tem permissão para usar este SoundBot.',
+    'login-falhou': 'Não foi possível concluir o login com o Discord. Veja o motivo no console do servidor.'
+  };
+  const loginError = loginErrors[params.get('erro')];
+  if (loginError) {
+    history.replaceState(null, '', window.location.pathname);
+    showNotice(loginError);
+  }
+
   await checkAuth();
 
   document.getElementById('btnLogout').addEventListener('click', async () => {
@@ -80,6 +129,14 @@ document.addEventListener('DOMContentLoaded', async () => {
 
   audioPlayer = $player;
   audioPlayer.addEventListener('ended', () => stopPlaying());
+  // A file/stream that can't be played (e.g. YouTube unavailable) used to leave
+  // the card "playing" forever with no feedback. In discord mode the element
+  // only reads metadata, so a failure there must not stop the bot.
+  audioPlayer.addEventListener('error', () => {
+    if (!playingCard || playbackMode === 'discord') return;
+    stopPlaying({ keepDiscord: true });
+    showNotice('Não foi possível tocar este áudio no navegador.');
+  });
   audioPlayer.addEventListener('timeupdate', updateToastProgress);
 
   
@@ -108,8 +165,8 @@ document.addEventListener('DOMContentLoaded', async () => {
   initDiscordModal();
 
   
-  document.getElementById('btnDirectory').addEventListener('click', openDirectoryModal);
-  document.getElementById('btnAddAudio').addEventListener('click', openAddAudioModal);
+  document.getElementById('btnDirectory').addEventListener('click', withLogin(openDirectoryModal));
+  document.getElementById('btnAddAudio').addEventListener('click', withLogin(openAddAudioModal));
   document.getElementById('btnSaveDirectory').addEventListener('click', saveDirectory);
   document.getElementById('btnUpload').addEventListener('click', uploadAudio);
   document.getElementById('btnNewCategory').addEventListener('click', promptNewCategory);
@@ -117,20 +174,10 @@ document.addEventListener('DOMContentLoaded', async () => {
   document.getElementById('inputNewCategory').addEventListener('keydown', e => {
     if (e.key === 'Enter') confirmNewCategory();
   });
-  document.getElementById('btnDiscord').addEventListener('click', () => {
-    if (!isAuthed) {
-      redirectToLogin();
-      return;
-    }
-    openModal('modalDiscord');
-  });
-  document.getElementById('btnPlaylist').addEventListener('click', () => {
-    if (!isAuthed) {
-      redirectToLogin();
-      return;
-    }
-    openPlaylistModal();
-  });
+  document.getElementById('btnDiscord').addEventListener('click',
+    withLogin(() => openModal('modalDiscord'), 'escolher a sala do Discord'));
+  document.getElementById('btnPlaylist').addEventListener('click',
+    withLogin(openPlaylistModal, 'tocar playlists no Discord'));
   initPlaylistModal();
   initEditModal();
   initSearch();
@@ -141,6 +188,11 @@ document.addEventListener('DOMContentLoaded', async () => {
   const fileInput = document.getElementById('inputAudioFile');
 
   uploadArea.addEventListener('click', () => fileInput.click());
+  document.querySelectorAll('[role="button"][tabindex="0"]:not(.audio-card)').forEach(el => {
+    el.addEventListener('keydown', e => {
+      if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); el.click(); }
+    });
+  });
   uploadArea.addEventListener('dragover', e => { e.preventDefault(); uploadArea.classList.add('dragover'); });
   uploadArea.addEventListener('dragleave', () => uploadArea.classList.remove('dragover'));
   uploadArea.addEventListener('drop', e => {
@@ -156,7 +208,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   
   document.querySelectorAll('.modal-overlay').forEach(overlay => {
     overlay.addEventListener('click', e => {
-      if (e.target === overlay) overlay.style.display = 'none';
+      if (e.target === overlay) closeModal(overlay.id);
     });
   });
 
@@ -194,19 +246,45 @@ async function loadCategories() {
   loadAudios(currentCategory);
 }
 
+// Bumped by every grid load (category or search): a slow response that
+// arrives after a newer request must not overwrite the grid.
+let gridRequestSeq = 0;
+
 async function loadAudios(category) {
+  const seq = ++gridRequestSeq;
   const res = await fetch(`/api/audios?category=${encodeURIComponent(category)}`);
   const audios = await res.json();
+  if (seq !== gridRequestSeq) return;
   renderAudioGrid(audios);
 }
 
 
+// Each real category gets a stable pad color by its position in the list
+let categoryPads = {};
+const PAD_COUNT = 6;
+
+function padColorFor(category) {
+  const n = categoryPads[category];
+  return n ? `var(--pad-${n})` : '';
+}
+
 function renderCategories(categories) {
   $catNav.innerHTML = '';
+  categoryPads = {};
+  categories.filter(c => c !== 'Geral').forEach((cat, i) => {
+    categoryPads[cat] = (i % PAD_COUNT) + 1;
+  });
   categories.forEach(cat => {
     const btn = document.createElement('button');
     btn.className = 'category-tab';
     btn.textContent = cat;
+    if (categoryPads[cat]) {
+      const dot = document.createElement('span');
+      dot.className = 'cat-dot';
+      dot.setAttribute('aria-hidden', 'true');
+      dot.style.setProperty('--pad', padColorFor(cat));
+      btn.prepend(dot);
+    }
     btn.addEventListener('click', () => {
       
       const searchInput = document.getElementById('inputSearch');
@@ -225,7 +303,7 @@ function renderCategories(categories) {
   addBtn.className = 'category-tab category-add-btn';
   addBtn.title = 'Nova categoria';
   addBtn.textContent = '+';
-  addBtn.addEventListener('click', addCategoryFromNav);
+  addBtn.addEventListener('click', withLogin(addCategoryFromNav));
   $catNav.appendChild(addBtn);
 }
 
@@ -249,11 +327,12 @@ function confirmNewCategory() {
 
 async function addCategoryFromNav() {
   openNewCategoryModal(async (name) => {
-    await fetch('/api/categories', {
+    const res = await fetch('/api/categories', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ name })
     });
+    if (!res.ok) return reportError(res, 'Não foi possível criar a categoria');
     loadCategories();
   });
 }
@@ -264,12 +343,16 @@ function setActiveCategory(name) {
   });
 }
 
-function renderAudioGrid(audios) {
+function renderAudioGrid(audios, searchQuery = '') {
   $grid.innerHTML = '';
 
   if (audios.length === 0) {
     $grid.style.display = 'none';
     $empty.style.display = 'flex';
+    document.getElementById('emptyText').textContent = searchQuery
+      ? `Nenhum áudio encontrado para "${searchQuery}"`
+      : 'Nenhum áudio nesta categoria';
+    document.getElementById('btnAddFirstAudio').style.display = searchQuery ? 'none' : '';
     return;
   }
 
@@ -279,6 +362,10 @@ function renderAudioGrid(audios) {
   audios.forEach(audio => {
     const card = document.createElement('div');
     card.className = 'audio-card';
+    card.tabIndex = 0;
+    if (categoryPads[audio.category]) card.style.setProperty('--pad', padColorFor(audio.category));
+    card.setAttribute('role', 'button');
+    card.setAttribute('aria-label', `Tocar ${audio.display || audio.name}`);
     card.dataset.url = audio.url || '';
     card.dataset.filename = audio.filename;
     card.dataset.category = audio.category;
@@ -298,21 +385,32 @@ function renderAudioGrid(audios) {
 
     card.innerHTML = `
       <div class="card-actions">
-        <button class="card-action-btn edit" title="Editar">
+        <button class="card-action-btn edit" title="Editar" aria-label="Editar ${escapeHtml(audio.display || audio.name)}">
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
             <path d="M17 3a2.85 2.85 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z"/>
             <path d="m15 5 4 4"/>
           </svg>
         </button>
-        <button class="card-action-btn delete" title="Remover">&times;</button>
+        <button class="card-action-btn delete" title="Remover" aria-label="Remover ${escapeHtml(audio.display || audio.name)}">&times;</button>
       </div>
       ${iconHtml}
       <div class="card-name">${escapeHtml(audio.display || audio.name)}</div>
+      <div class="card-progress" aria-hidden="true"><span></span></div>
     `;
+
+    card.addEventListener('keydown', e => {
+      if (e.target !== card) return;
+      if (e.key === 'Enter' || e.key === ' ') {
+        e.preventDefault();
+        card.click();
+      }
+    });
 
     card.addEventListener('click', e => {
       if (e.target.closest('.card-action-btn')) return;
       if (audio.type === 'youtube') {
+        // Streaming YouTube runs yt-dlp on the server, so it needs login
+        if (!isAuthed) return notifyLoginRequired('tocar links do YouTube');
         togglePlayYouTube(card, audio.youtubeUrl, audio.display || audio.name);
       } else {
         togglePlay(card, audio.url);
@@ -321,12 +419,12 @@ function renderAudioGrid(audios) {
 
     card.querySelector('.card-action-btn.edit').addEventListener('click', e => {
       e.stopPropagation();
-      openEditModal(audio);
+      withLogin(openEditModal)(audio);
     });
 
     card.querySelector('.card-action-btn.delete').addEventListener('click', e => {
       e.stopPropagation();
-      deleteAudio(audio);
+      withLogin(deleteAudio)(audio);
     });
 
     $grid.appendChild(card);
@@ -340,7 +438,9 @@ function togglePlay(card, url) {
     return;
   }
 
-  stopPlaying();
+  // The new play already interrupts the bot server-side; a separate stop request
+  // could arrive after it and silence the new audio.
+  stopPlaying({ keepDiscord: requiresDiscordAuth(playbackMode) });
   playingCard = card;
   card.classList.add('playing');
 
@@ -360,8 +460,10 @@ function togglePlay(card, url) {
   
   if (playbackMode === 'discord') {
     audioPlayer.src = url;
-    audioPlayer.addEventListener('loadedmetadata', function onMeta() {
+    discordMetaListener = function onMeta() {
       audioPlayer.removeEventListener('loadedmetadata', onMeta);
+      discordMetaListener = null;
+      if (playingCard !== card) return;
       discordStartTime = Date.now();
       const duration = audioPlayer.duration;
       discordProgressTimer = setInterval(() => {
@@ -371,10 +473,11 @@ function togglePlay(card, url) {
           return;
         }
         const pct = (elapsed / duration) * 100;
-        $toastBar.style.width = pct + '%';
+        setProgress(pct);
         $toastTime.textContent = `${formatTime(elapsed)} / ${formatTime(duration)}`;
       }, 250);
-    });
+    };
+    audioPlayer.addEventListener('loadedmetadata', discordMetaListener);
   }
 
   showToast(name);
@@ -386,11 +489,11 @@ function togglePlayYouTube(card, youtubeUrl, name) {
     return;
   }
 
-  stopPlaying();
+  stopPlaying({ keepDiscord: requiresDiscordAuth(playbackMode) });
   playingCard = card;
   card.classList.add('playing');
 
-  
+
   if (playbackMode === 'local' || playbackMode === 'both') {
     const streamUrl = '/api/youtube/stream?url=' + encodeURIComponent(youtubeUrl);
     audioPlayer.src = streamUrl;
@@ -409,20 +512,31 @@ function togglePlayYouTube(card, youtubeUrl, name) {
   showToast(name);
 }
 
-function stopPlaying() {
+// Drop the discord-mode progress timer and any listener still waiting to start one
+function clearDiscordProgress() {
+  if (discordMetaListener) {
+    audioPlayer.removeEventListener('loadedmetadata', discordMetaListener);
+    discordMetaListener = null;
+  }
+  if (discordProgressTimer) {
+    clearInterval(discordProgressTimer);
+    discordProgressTimer = null;
+  }
+}
+
+// keepDiscord: skip the stop request when a new play is about to replace it
+function stopPlaying({ keepDiscord = false } = {}) {
   if (playingCard) {
+    const cardBar = playingCard.querySelector('.card-progress span');
+    if (cardBar) cardBar.style.width = '0%';
     playingCard.classList.remove('playing');
     playingCard = null;
   }
   audioPlayer.pause();
   audioPlayer.currentTime = 0;
+  clearDiscordProgress();
 
-  if (discordProgressTimer) {
-    clearInterval(discordProgressTimer);
-    discordProgressTimer = null;
-  }
-
-  if (playbackMode === 'discord' || playbackMode === 'both') {
+  if (!keepDiscord && requiresDiscordAuth(playbackMode)) {
     stopDiscord();
   }
 
@@ -431,9 +545,12 @@ function stopPlaying() {
 
 function showToast(name) {
   $toast.classList.remove('playlist-mode');
+  const pad = playingCard && playingCard.style.getPropertyValue('--pad');
+  if (pad) $toast.style.setProperty('--pad', pad);
+  else $toast.style.removeProperty('--pad');
   $toastName.textContent = name;
   $toastTime.textContent = '0:00 / 0:00';
-  $toastBar.style.width = '0%';
+  setProgress(0);
   $toast.classList.add('visible');
 }
 
@@ -441,10 +558,16 @@ function hideToast() {
   $toast.classList.remove('visible');
 }
 
+function setProgress(pct) {
+  $toastBar.style.width = pct + '%';
+  const cardBar = playingCard && playingCard.querySelector('.card-progress span');
+  if (cardBar) cardBar.style.width = pct + '%';
+}
+
 function updateToastProgress() {
   if (!audioPlayer.duration) return;
   const pct = (audioPlayer.currentTime / audioPlayer.duration) * 100;
-  $toastBar.style.width = pct + '%';
+  setProgress(pct);
   $toastTime.textContent = `${formatTime(audioPlayer.currentTime)} / ${formatTime(audioPlayer.duration)}`;
 }
 
@@ -458,11 +581,12 @@ function formatTime(sec) {
 async function deleteAudio(audio) {
   if (!confirm(`Remover "${audio.name}"?`)) return;
 
-  await fetch('/api/audios', {
+  const res = await fetch('/api/audios', {
     method: 'DELETE',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ category: audio.category, filename: audio.filename })
   });
+  if (!res.ok) await reportError(res, 'Não foi possível remover o áudio');
 
   loadAudios(currentCategory);
 }
@@ -488,6 +612,8 @@ async function saveDirectory() {
     document.getElementById('currentDir').textContent = data.audioDir;
     closeModal('modalDirectory');
     loadCategories();
+  } else {
+    await reportError(res, 'Não foi possível alterar a pasta');
   }
 }
 
@@ -561,11 +687,12 @@ async function populateCategorySelect() {
 
 async function promptNewCategory() {
   openNewCategoryModal(async (name) => {
-    await fetch('/api/categories', {
+    const res = await fetch('/api/categories', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ name })
     });
+    if (!res.ok) return reportError(res, 'Não foi possível criar a categoria');
 
     await populateCategorySelect();
     document.getElementById('selectCategory').value = name;
@@ -601,12 +728,13 @@ async function uploadAudio() {
   if (!file) return;
 
   const category = document.getElementById('selectCategory').value;
+  if (!category) return alert('Crie uma categoria antes de adicionar áudios.');
   const formData = new FormData();
   formData.append('audio', file);
   formData.append('category', category);
 
   document.getElementById('btnUpload').disabled = true;
-  document.getElementById('btnUpload').textContent = 'Enviando...';
+  document.getElementById('btnUpload').textContent = 'Adicionando…';
 
   const res = await fetch('/api/audios', { method: 'POST', body: formData });
 
@@ -615,9 +743,11 @@ async function uploadAudio() {
     currentCategory = category;
     setActiveCategory(category);
     loadAudios(category);
+  } else {
+    await reportError(res, 'Não foi possível adicionar o áudio');
   }
 
-  document.getElementById('btnUpload').textContent = 'Enviar';
+  document.getElementById('btnUpload').textContent = 'Adicionar';
   document.getElementById('btnUpload').disabled = false;
 }
 
@@ -629,6 +759,7 @@ async function uploadYouTubeAudio() {
   const end = download ? document.getElementById('inputYoutubeEnd').value.trim() : '';
   const category = document.getElementById('selectCategory').value;
   if (!url) return;
+  if (!category) return alert('Crie uma categoria antes de adicionar áudios.');
 
   document.getElementById('btnUpload').disabled = true;
   document.getElementById('btnUpload').textContent = download ? 'Baixando...' : 'Salvando...';
@@ -646,15 +777,14 @@ async function uploadYouTubeAudio() {
       setActiveCategory(category);
       loadAudios(category);
     } else {
-      const data = await res.json();
-      alert(data.error || 'Erro ao salvar YouTube');
+      await reportError(res, 'Erro ao salvar YouTube');
     }
   } catch (err) {
     console.error('YouTube save error:', err);
     alert('Erro ao salvar YouTube');
   }
 
-  document.getElementById('btnUpload').textContent = 'Enviar';
+  document.getElementById('btnUpload').textContent = 'Adicionar';
   document.getElementById('btnUpload').disabled = false;
 }
 
@@ -674,7 +804,12 @@ async function openEditModal(audio) {
   const categories = await res.json();
   const select = document.getElementById('selectEditCategory');
   select.innerHTML = '';
-  categories.filter(c => c !== 'Geral').forEach(cat => {
+  // The audio's own folder must be an option even when it isn't a listed tab
+  // (a legacy real "Geral" folder) — otherwise the select falls back to the
+  // first category and saving silently moves the audio there.
+  const options = categories.filter(c => c !== 'Geral');
+  if (!options.includes(audio.category)) options.unshift(audio.category);
+  options.forEach(cat => {
     const opt = document.createElement('option');
     opt.value = cat;
     opt.textContent = cat;
@@ -732,7 +867,8 @@ async function saveEdit() {
 
   
   const displayName = document.getElementById('inputDisplayName').value;
-  await fetch('/api/audios/display', {
+  const failures = [];
+  const displayRes = await fetch('/api/audios/display', {
     method: 'PUT',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
@@ -741,6 +877,7 @@ async function saveEdit() {
       display: displayName
     })
   });
+  if (!displayRes.ok) failures.push(displayRes);
 
   
   const file = document.getElementById('inputThumbFile').files[0];
@@ -749,13 +886,14 @@ async function saveEdit() {
     formData.append('thumbnail', file);
     formData.append('category', activeCategory);
     formData.append('filename', editingAudio.filename);
-    await fetch('/api/audios/thumbnail', { method: 'PUT', body: formData });
+    const thumbRes = await fetch('/api/audios/thumbnail', { method: 'PUT', body: formData });
+    if (!thumbRes.ok) failures.push(thumbRes);
   }
 
   
   const targetCategory = document.getElementById('selectEditCategory').value;
   if (targetCategory && targetCategory !== activeCategory) {
-    await fetch('/api/audios/move', {
+    const moveRes = await fetch('/api/audios/move', {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -764,7 +902,10 @@ async function saveEdit() {
         targetCategory
       })
     });
+    if (!moveRes.ok) failures.push(moveRes);
   }
+
+  if (failures.length) await reportError(failures[0], 'Não foi possível salvar as alterações');
 
   closeModal('modalEditAudio');
   loadAudios(currentCategory);
@@ -781,6 +922,14 @@ function initSearch() {
   input.addEventListener('input', () => {
     clearTimeout(searchTimeout);
     searchTimeout = setTimeout(() => performSearch(input.value), 300);
+  });
+  input.addEventListener('keydown', e => {
+    if (e.key === 'Escape' && input.value) {
+      e.stopPropagation();
+      input.value = '';
+      clearTimeout(searchTimeout);
+      performSearch('');
+    }
   });
 }
 
@@ -801,19 +950,35 @@ async function performSearch(query) {
   });
   document.querySelector('.category-add-btn').disabled = false;
 
+  const seq = ++gridRequestSeq;
   const res = await fetch(`/api/audios/search?q=${encodeURIComponent(trimmed)}`);
   const audios = await res.json();
-  renderAudioGrid(audios);
+  if (seq !== gridRequestSeq) return;
+  renderAudioGrid(audios, trimmed);
 }
 
 
+let modalReturnFocus = null;
+
 function openModal(id) {
-  document.getElementById(id).style.display = 'flex';
+  const overlay = document.getElementById(id);
+  modalReturnFocus = document.activeElement;
+  overlay.style.display = 'flex';
+  const first = overlay.querySelector('.modal-body input:not([type="checkbox"]):not([style*="display:none"]), .modal-body select');
+  if (first) setTimeout(() => first.focus(), 50);
 }
 
 function closeModal(id) {
   document.getElementById(id).style.display = 'none';
+  if (modalReturnFocus && document.contains(modalReturnFocus)) modalReturnFocus.focus();
+  modalReturnFocus = null;
 }
+
+document.addEventListener('keydown', e => {
+  if (e.key !== 'Escape') return;
+  const open = [...document.querySelectorAll('.modal-overlay')].filter(o => o.style.display !== 'none');
+  if (open.length) closeModal(open[open.length - 1].id);
+});
 
 
 async function loadDiscordStatus() {
@@ -1036,10 +1201,7 @@ function clearBrowserPlayback() {
   }
   audioPlayer.pause();
   audioPlayer.currentTime = 0;
-  if (discordProgressTimer) {
-    clearInterval(discordProgressTimer);
-    discordProgressTimer = null;
-  }
+  clearDiscordProgress();
 }
 
 function renderPlaylistToast() {
@@ -1052,6 +1214,7 @@ function renderPlaylistToast() {
   if (playlistInfo.loop) flags.push('loop');
   $toastTime.textContent = flags.join(' · ');
   $toast.classList.toggle('single-track', single);
+  $toast.style.removeProperty('--pad');
   $toast.classList.add('playlist-mode', 'visible');
 }
 
@@ -1130,13 +1293,13 @@ function initPlaybackToggle() {
 
   const toggle = document.getElementById('playbackToggle');
   toggle.querySelectorAll('.toggle-option').forEach(btn => {
-    if (btn.dataset.mode === playbackMode) btn.classList.add('active');
-    else btn.classList.remove('active');
+    btn.classList.toggle('active', btn.dataset.mode === playbackMode);
+    btn.setAttribute('aria-pressed', String(btn.dataset.mode === playbackMode));
 
     btn.addEventListener('click', () => {
       const mode = btn.dataset.mode;
       if (requiresDiscordAuth(mode) && !isAuthed) {
-        redirectToLogin();
+        notifyLoginRequired('tocar no canal de voz');
         return;
       }
       setPlaybackMode(mode);
@@ -1149,6 +1312,7 @@ function setPlaybackMode(mode) {
   localStorage.setItem('playbackMode', mode);
   document.querySelectorAll('.toggle-option').forEach(btn => {
     btn.classList.toggle('active', btn.dataset.mode === mode);
+    btn.setAttribute('aria-pressed', String(btn.dataset.mode === mode));
   });
 }
 

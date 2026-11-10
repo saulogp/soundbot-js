@@ -41,12 +41,14 @@ soundbot/
 
 ### `server.js` — API REST
 
-- **Autenticacao**: Discord OAuth2 (`/auth/discord`, `/auth/discord/callback`, `/auth/me`, `/auth/logout`). Sessao com `express-session`. Middleware `requireAuth` protege todas as rotas de API.
+- **Autenticacao**: Discord OAuth2 (`/auth/discord`, `/auth/discord/callback`, `/auth/me`, `/auth/logout`). Sessao com `express-session` (OAuth com `state`, sessao regenerada no login). `requireAuth` protege toda rota que altera algo (pasta, categorias, upload, editar, mover, apagar), o stream do YouTube e todas as rotas `/api/discord/*`. Se `allowedUserIds` (config) nao estiver vazio, so esses IDs do Discord conseguem logar, e `requireAuth` confere a lista a cada request (403). Leituras (`GET /api/config`, `/api/categories`, `/api/audios`, `/api/audios/search`, `/audio-files`) ficam abertas para o modo Navegador funcionar sem login.
 - **Config**: `loadConfig()` / `saveConfig()` — persiste em `config.json`. Suporta `SOUNDBOT_CONFIG_DIR` para Electron.
 - **Categorias**: Pastas no filesystem. "Geral" e virtual (agrega tudo). CRUD via `/api/categories`.
 - **Audios**: Upload via multer para `.tmp-uploads/`, depois move para pasta da categoria. Suporte a arquivos locais e entradas YouTube (metadata-only). CRUD completo via `/api/audios/*`.
 - **Metadata**: `.metadata.json` por categoria — armazena thumbnail, display name, tipo (youtube), URL.
-- **Seguranca**: `safePath()` previne path traversal. Validacao de extensoes no multer. Secrets do Discord nunca expostos ao frontend.
+- **Seguranca**: servidor escuta em `127.0.0.1` (`SOUNDBOT_HOST=0.0.0.0` libera a rede). `safePath()` previne path traversal; `resolveCategoryDir()` exige categoria de um nivel so (sem separador, sem `.`), `resolveEntry()` valida `{category, filename}` (arquivo de audio existente ou link YouTube pelo `type` do metadata). Validacao de extensoes e limite de tamanho no multer (50 MB audio, 5 MB thumbnail). Variaveis `SOUNDBOT_CLIENT_ID/CLIENT_SECRET/BOT_TOKEN` sobrescrevem a config so em memoria — `saveConfig()` nunca as grava. `/audio-files` responde com CSP `sandbox` + `nosniff` (thumbnails SVG). Rotas do Discord validam que o usuario pertence ao servidor (`resolveGuildId`). Secrets do Discord nunca expostos ao frontend.
+- **Acesso a dados**: `listCategoryAudios()` / `listAllAudios()` montam as entradas (arquivo local + links YouTube) para listagem e busca. `writeJsonAtomic()` grava config e metadata via arquivo temporario + rename. `moveFile()` cai para copia+delete quando a pasta de audios esta em outro disco (EXDEV).
+- **Erros**: `throw new ApiError(status, msg)` em qualquer rota (sem `try/catch` + `res.status`); o handler central responde `{ error }` JSON (inclusive para 404 em `/api` e JSON invalido). Erros do `discord-bot.js` (`botError`) levam `status`/`expose` e chegam ao mesmo handler — erros sem `expose` viram 500 generico.
 
 #### Rotas da API
 
@@ -117,8 +119,8 @@ soundbot/
 
 ### Backend
 - Funcoes sync para filesystem (`readFileSync`, `writeFileSync`, `mkdirSync`, `readdirSync`)
-- Sempre validar paths com `safePath()` antes de operacoes de arquivo
-- Toda rota de API usa `requireAuth` middleware
+- Sempre validar paths com `safePath()` antes de operacoes de arquivo; categorias com `resolveCategoryDir()` e entradas com `resolveEntry()`
+- Toda rota que altera estado ou toca o Discord usa `requireAuth`; leituras da biblioteca ficam abertas
 - Respostas JSON. Erros no formato `{ error: "mensagem" }`
 - Config carregada fresh em cada request (`loadConfig()` — nao cachear)
 
@@ -144,6 +146,7 @@ soundbot/
 {
   "audioDir": "caminho/para/audios",
   "categories": ["Geral"],
+  "allowedUserIds": ["123456789012345678"],
   "discord": {
     "token": "bot-token",
     "clientId": "oauth-client-id",
@@ -156,6 +159,7 @@ soundbot/
 ```
 
 - `audioDir`: Diretorio raiz onde subpastas = categorias
+- `allowedUserIds`: IDs de usuario do Discord que podem logar e gerenciar. Vazio = qualquer conta (ok em localhost; defina ao usar `SOUNDBOT_HOST=0.0.0.0`)
 - `discord.token`: Token do bot (nunca exposto ao frontend)
 - `discord.clientId/clientSecret`: Credenciais OAuth2
 - `defaultGuildId/defaultChannelId`: Salvos automaticamente ao entrar em um canal
@@ -170,9 +174,9 @@ npm run build       # Build Electron (NSIS + portable) para Windows x64
 
 ## Notas de Desenvolvimento
 
-- Ao adicionar novas rotas, sempre incluir `requireAuth` middleware
+- Ao adicionar rotas que alteram algo, sempre incluir `requireAuth` middleware
 - Novas operacoes de filesystem devem usar `safePath()` para prevenir path traversal
 - YouTube entries sao metadata-only (chave comeca com `yt_`) — nao tem arquivo fisico
-- "Geral" nao e uma pasta real — e um agregador virtual de todas as categorias
+- "Geral" nao e uma pasta real — e um agregador virtual de todas as categorias. `resolveTargetCategoryDir()` recusa "Geral" (sem diferenciar maiusculas) como destino em upload, YouTube, mover e nova categoria; audios ja existentes numa pasta "Geral" legada continuam acessiveis para poderem ser movidos
 - O frontend faz polling do status Discord a cada 30 segundos
 - Session secret e gerado aleatoriamente a cada restart — sessoes nao persistem entre restarts do servidor

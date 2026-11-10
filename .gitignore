@@ -33,3 +33,5 @@ Thumbs.db
 
 #folders
 audios
+# yt-dlp baixado automaticamente em modo standalone
+bin/
