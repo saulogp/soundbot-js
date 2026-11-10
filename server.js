@@ -3,6 +3,7 @@ const session = require('express-session');
 const crypto = require('crypto');
 const multer = require('multer');
 const path = require('path');
+const os = require('os');
 const fs = require('fs');
 const { spawn } = require('child_process');
 const ffmpegStatic = require('ffmpeg-static');
@@ -553,6 +554,57 @@ app.put('/api/config/directory', requireAuth, (req, res) => {
   config.audioDir = resolved;
   saveConfig(config);
   res.json({ audioDir: resolved });
+});
+
+// GET /api/fs/directories?path= — folder browser for the "Pasta de áudios" modal
+// in browser mode (a web page can't get a folder's absolute path from the OS
+// picker). Lists only subfolder names, never files. Intentionally not confined
+// to audioDir: picking any folder is the point, and PUT /api/config/directory
+// already accepts any absolute path from the same authenticated users.
+app.get('/api/fs/directories', requireAuth, (req, res) => {
+  const requested = typeof req.query.path === 'string' ? req.query.path.trim() : '';
+  let dir;
+  if (requested) {
+    if (!path.isAbsolute(requested)) throw new ApiError(400, 'Informe um caminho absoluto');
+    dir = path.resolve(requested);
+  } else {
+    // Start where the library is, or at home when it doesn't exist yet
+    const { audioDir } = loadConfig();
+    dir = audioDir && fs.existsSync(audioDir) ? path.resolve(audioDir) : os.homedir();
+  }
+
+  let entries;
+  try {
+    entries = fs.readdirSync(dir, { withFileTypes: true });
+  } catch (err) {
+    if (err.code === 'ENOENT') throw new ApiError(404, 'Pasta não encontrada');
+    if (err.code === 'ENOTDIR') throw new ApiError(400, 'O caminho não é uma pasta');
+    if (err.code === 'EACCES' || err.code === 'EPERM') throw new ApiError(403, 'Sem permissão para abrir esta pasta');
+    throw err;
+  }
+
+  const directories = entries
+    .filter(e => !e.name.startsWith('.'))
+    .filter(e => {
+      if (e.isDirectory()) return true;
+      if (!e.isSymbolicLink()) return false;
+      try { return fs.statSync(path.join(dir, e.name)).isDirectory(); } catch { return false; }
+    })
+    .map(e => e.name)
+    .sort((a, b) => a.localeCompare(b, 'pt-BR', { sensitivity: 'base', numeric: true }))
+    .map(name => ({ name, path: path.join(dir, name) }));
+
+  const parent = path.dirname(dir);
+  res.json({
+    path: dir,
+    parent: parent !== dir ? parent : null,
+    home: os.homedir(),
+    // Windows has one root per drive; elsewhere there is only "/"
+    roots: process.platform === 'win32'
+      ? 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'.split('').map(l => `${l}:\\`).filter(r => fs.existsSync(r))
+      : ['/'],
+    directories
+  });
 });
 
 // GET /api/categories — "Geral" is a virtual tab that shows all audios, always first

@@ -170,6 +170,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   document.getElementById('btnDirectory').addEventListener('click', withLogin(openDirectoryModal));
   document.getElementById('btnAddAudio').addEventListener('click', withLogin(openAddAudioModal));
   document.getElementById('btnSaveDirectory').addEventListener('click', saveDirectory);
+  initDirectoryPicker();
   document.getElementById('btnUpload').addEventListener('click', uploadAudio);
   document.getElementById('btnNewCategory').addEventListener('click', promptNewCategory);
   document.getElementById('btnConfirmNewCategory').addEventListener('click', confirmNewCategory);
@@ -602,8 +603,137 @@ async function deleteAudio(audio) {
 
 
 function openDirectoryModal() {
+  setDirBrowserOpen(false);
   loadConfig();
   openModal('modalDirectory');
+}
+
+// "Procurar…" in the Pasta de áudios modal. Inside Electron it opens the
+// native folder dialog (preload.js). In a plain browser a page can't learn a
+// folder's absolute path from the OS picker, so it toggles a folder browser
+// fed by the server (/api/fs/directories). Typing a path always works too.
+const FOLDER_ICON = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>';
+let dirBrowserState = null; // last /api/fs/directories response
+let dirBrowseSeq = 0;       // drops responses of superseded requests
+
+function initDirectoryPicker() {
+  const btn = document.getElementById('btnBrowseDirectory');
+  const input = document.getElementById('inputDirectory');
+  const desktop = window.soundbotDesktop;
+  const hasNativePicker = !!desktop && typeof desktop.pickDirectory === 'function';
+
+  document.getElementById('directoryHint').textContent =
+    'Escolha a pasta onde os áudios serão armazenados ou cole o caminho completo.';
+
+  btn.addEventListener('click', async () => {
+    if (!hasNativePicker) {
+      toggleDirBrowser();
+      return;
+    }
+    btn.disabled = true;
+    try {
+      const dir = await desktop.pickDirectory(input.value.trim());
+      if (dir) {
+        input.value = dir;
+        input.focus();
+      }
+    } catch {
+    } finally {
+      btn.disabled = false;
+    }
+  });
+
+  document.getElementById('btnDirUp').addEventListener('click', () => {
+    if (dirBrowserState?.parent) browseDirectory(dirBrowserState.parent);
+  });
+  document.getElementById('btnDirHome').addEventListener('click', () => {
+    if (dirBrowserState?.home) browseDirectory(dirBrowserState.home);
+  });
+  document.getElementById('selectDirRoot').addEventListener('change', e => browseDirectory(e.target.value));
+}
+
+function setDirBrowserOpen(open) {
+  document.getElementById('dirBrowser').hidden = !open;
+  document.getElementById('btnBrowseDirectory').setAttribute('aria-expanded', String(open));
+}
+
+function toggleDirBrowser() {
+  const opening = document.getElementById('dirBrowser').hidden;
+  setDirBrowserOpen(opening);
+  if (opening) {
+    // Start at what's typed; if that doesn't exist yet, the server's default
+    const typed = document.getElementById('inputDirectory').value.trim();
+    browseDirectory(typed, { fallbackToDefault: true });
+  }
+}
+
+async function browseDirectory(target, { fallbackToDefault = false } = {}) {
+  const seq = ++dirBrowseSeq;
+  const query = target ? `?path=${encodeURIComponent(target)}` : '';
+  let res;
+  try {
+    res = await fetch(`/api/fs/directories${query}`);
+  } catch {
+    return;
+  }
+  if (seq !== dirBrowseSeq) return;
+
+  if (!res.ok) {
+    if (fallbackToDefault && target && res.status !== 401) return browseDirectory('');
+    await reportError(res, 'Não foi possível abrir a pasta');
+    return;
+  }
+
+  dirBrowserState = await res.json();
+  if (seq !== dirBrowseSeq) return;
+  renderDirBrowser();
+  // The browsed folder is the selection — Salvar uses it
+  document.getElementById('inputDirectory').value = dirBrowserState.path;
+}
+
+function renderDirBrowser() {
+  const state = dirBrowserState;
+  const pathEl = document.getElementById('dirBrowserPath');
+  pathEl.textContent = state.path;
+  pathEl.title = state.path;
+  document.getElementById('btnDirUp').disabled = !state.parent;
+
+  // Drive picker only makes sense with more than one root (Windows)
+  const rootSelect = document.getElementById('selectDirRoot');
+  rootSelect.hidden = state.roots.length < 2;
+  rootSelect.innerHTML = '';
+  const currentRoot = state.roots.find(r => state.path.toUpperCase().startsWith(r.toUpperCase()));
+  state.roots.forEach(r => {
+    const opt = document.createElement('option');
+    opt.value = r;
+    opt.textContent = r;
+    if (r === currentRoot) opt.selected = true;
+    rootSelect.appendChild(opt);
+  });
+
+  const list = document.getElementById('dirBrowserList');
+  list.innerHTML = '';
+  list.scrollTop = 0;
+  if (!state.directories.length) {
+    const empty = document.createElement('li');
+    empty.className = 'dir-browser-empty';
+    empty.textContent = 'Nenhuma subpasta';
+    list.appendChild(empty);
+    return;
+  }
+  state.directories.forEach(d => {
+    const li = document.createElement('li');
+    const item = document.createElement('button');
+    item.type = 'button';
+    item.className = 'dir-browser-item';
+    item.innerHTML = FOLDER_ICON;
+    const name = document.createElement('span');
+    name.textContent = d.name;
+    item.appendChild(name);
+    item.addEventListener('click', () => browseDirectory(d.path));
+    li.appendChild(item);
+    list.appendChild(li);
+  });
 }
 
 async function saveDirectory() {

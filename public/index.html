@@ -123,10 +123,31 @@
         <button class="modal-close" data-close="modalDirectory" aria-label="Fechar">&times;</button>
       </div>
       <div class="modal-body">
-        <p class="modal-hint">Informe o caminho completo da pasta onde os áudios serão armazenados.</p>
+        <p class="modal-hint" id="directoryHint">Informe o caminho completo da pasta onde os áudios serão armazenados.</p>
         <div class="input-group">
           <label for="inputDirectory">Caminho da pasta</label>
-          <input type="text" id="inputDirectory" placeholder="C:\meus-audios">
+          <div class="select-row">
+            <input type="text" id="inputDirectory" placeholder="C:\meus-audios">
+            <!-- Electron: native dialog. Browser: toggles the folder browser below -->
+            <button type="button" class="btn btn-outline" id="btnBrowseDirectory" aria-expanded="false" aria-controls="dirBrowser">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>
+              Procurar…
+            </button>
+          </div>
+        </div>
+        <!-- Folder browser (browser mode): lists the server's folders via /api/fs/directories -->
+        <div class="dir-browser" id="dirBrowser" hidden>
+          <div class="dir-browser-bar">
+            <button type="button" class="btn btn-ghost btn-sm" id="btnDirUp" aria-label="Pasta acima" title="Pasta acima">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 19V5"/><path d="m5 12 7-7 7 7"/></svg>
+            </button>
+            <button type="button" class="btn btn-ghost btn-sm" id="btnDirHome" aria-label="Pasta pessoal" title="Pasta pessoal">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m3 10 9-7 9 7v10a1 1 0 0 1-1 1h-5v-6h-6v6H4a1 1 0 0 1-1-1z"/></svg>
+            </button>
+            <select class="dir-browser-root" id="selectDirRoot" aria-label="Unidade" hidden></select>
+            <span class="dir-browser-path" id="dirBrowserPath"></span>
+          </div>
+          <ul class="dir-browser-list" id="dirBrowserList"></ul>
         </div>
         <p class="current-dir">Pasta atual: <code id="currentDir">-</code></p>
       </div>

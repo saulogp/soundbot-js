@@ -8,7 +8,8 @@ SoundBot e uma aplicacao para gerenciamento e reproducao de audio em canais de v
 
 ```
 soundbot/
-  electron-main.js    # Entrada Electron (janela, tray, lifecycle)
+  electron-main.js    # Entrada Electron (janela, tray, lifecycle, IPC)
+  preload.js          # Ponte Electron -> pagina (window.soundbotDesktop)
   server.js           # Servidor Express (API REST, OAuth2, uploads, config)
   discord-bot.js      # Modulo do bot Discord (voice, audio player, yt-dlp)
   public/
@@ -60,6 +61,7 @@ soundbot/
 | POST   | `/auth/logout`             | Encerra sessao                     |
 | GET    | `/api/config`              | Config (sem secrets)               |
 | PUT    | `/api/config/directory`    | Altera diretorio de audios         |
+| GET    | `/api/fs/directories`      | Lista subpastas (seletor de pasta) |
 | GET    | `/api/categories`          | Lista categorias                   |
 | POST   | `/api/categories`          | Cria categoria                     |
 | GET    | `/api/audios`              | Lista audios (por categoria)       |
@@ -100,6 +102,7 @@ soundbot/
 - `SOUNDBOT_CONFIG_DIR` → `app.getPath('userData')` para nao escrever ao lado do .exe
 - Graceful shutdown do bot no `before-quit`
 - No Linux fechar a janela encerra o app (bandeja nem sempre existe, ex.: GNOME)
+- `preload.js` expoe `window.soundbotDesktop.pickDirectory()` → IPC `pick-directory` → `dialog.showOpenDialog`. O handler so atende a pagina do proprio app (origem `http://localhost:PORT`), ja que o preload tambem roda no OAuth do Discord. No navegador (sem `window.soundbotDesktop`) o botao "Procurar…" abre um navegador de pastas no proprio modal, alimentado por `GET /api/fs/directories?path=` (`requireAuth`; lista so nomes de subpastas, sem arquivos nem pastas ocultas; nao fica preso ao `audioDir` de proposito — mesma confianca do `PUT /api/config/directory`). O campo de texto continua valendo nos dois modos
 - Builds passam por `scripts/build.js`, que troca o binario do `ffmpeg-static` pelo do SO alvo em build cruzado e restaura depois
 
 ### `public/app.js` — Frontend

@@ -1,4 +1,4 @@
-const { app, BrowserWindow, Tray, Menu, nativeImage, dialog } = require('electron');
+const { app, BrowserWindow, Tray, Menu, nativeImage, dialog, ipcMain } = require('electron');
 const path = require('path');
 const fs = require('fs');
 
@@ -43,7 +43,8 @@ function createWindow() {
     title: 'SoundBot',
     webPreferences: {
       nodeIntegration: false,
-      contextIsolation: true
+      contextIsolation: true,
+      preload: path.join(__dirname, 'preload.js')
     }
   });
 
@@ -156,7 +157,34 @@ app.whenReady().then(async () => {
 });
 
 app.on('window-all-closed', () => {
-  // No-op: keep the app alive in the tray
+  // Elsewhere the app stays alive in the tray. On Linux closing the window
+  // means quit (see createWindow) — otherwise the server would keep running
+  // invisibly and hold the port.
+  if (process.platform === 'linux') {
+    app.isQuitting = true;
+    app.quit();
+  }
+});
+
+// ---------------------------------------------------------------------------
+// IPC — native folder picker for the "Pasta de áudios" modal
+// ---------------------------------------------------------------------------
+ipcMain.handle('pick-directory', async (event, defaultPath) => {
+  // The preload also runs on pages the window navigates to (Discord OAuth);
+  // only the app's own page may open dialogs.
+  const { PORT } = require('./server');
+  let origin = null;
+  try { origin = new URL(event.senderFrame?.url).origin; } catch {}
+  if (origin !== `http://localhost:${PORT}`) return null;
+
+  const win = BrowserWindow.fromWebContents(event.sender);
+  const { canceled, filePaths } = await dialog.showOpenDialog(win, {
+    title: 'Escolher pasta de áudios',
+    buttonLabel: 'Usar esta pasta',
+    defaultPath: typeof defaultPath === 'string' && path.isAbsolute(defaultPath) ? defaultPath : undefined,
+    properties: ['openDirectory', 'createDirectory']
+  });
+  return canceled || !filePaths.length ? null : filePaths[0];
 });
 
 app.on('activate', () => {
