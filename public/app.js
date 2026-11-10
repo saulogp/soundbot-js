@@ -4,6 +4,8 @@ let audioPlayer = null;
 let playingCard = null;
 let playbackMode = localStorage.getItem('playbackMode') || 'local';
 let discordStatus = { online: false, username: null, guilds: [] };
+let guildPickedManually = false; // user changed the server in the Discord modal
+let channelPickedManually = false; // user changed the voice channel in the Discord modal
 let discordProgressTimer = null;
 let discordStartTime = 0;
 let discordMetaListener = null; // pending 'loadedmetadata' listener of discord mode
@@ -175,7 +177,14 @@ document.addEventListener('DOMContentLoaded', async () => {
     if (e.key === 'Enter') confirmNewCategory();
   });
   document.getElementById('btnDiscord').addEventListener('click',
-    withLogin(() => openModal('modalDiscord'), 'escolher a sala do Discord'));
+    withLogin(() => {
+      // Fresh open: forget any manual pick so the server the user is in
+      // right now gets preselected, and refresh voice state before showing
+      guildPickedManually = false;
+      channelPickedManually = false;
+      openModal('modalDiscord');
+      loadDiscordStatus();
+    }, 'escolher a sala do Discord'));
   document.getElementById('btnPlaylist').addEventListener('click',
     withLogin(openPlaylistModal, 'tocar playlists no Discord'));
   initPlaylistModal();
@@ -1024,15 +1033,18 @@ function renderDiscordModal() {
     statusText.textContent = `Conectado como ${discordStatus.username}`;
     onlineSection.style.display = '';
 
-    
     const guildSelect = document.getElementById('selectGuild');
+    const previousGuildId = guildSelect.value;
     guildSelect.innerHTML = '';
     discordStatus.guilds.forEach(g => {
       const opt = document.createElement('option');
       opt.value = g.id;
-      opt.textContent = g.name;
+      opt.textContent = g.userChannelId ? `${g.name} (você está aqui)` : g.name;
       guildSelect.appendChild(opt);
     });
+
+    const preferred = pickPreferredGuildId(previousGuildId);
+    if (preferred) guildSelect.value = preferred;
 
     if (guildSelect.options.length > 0) {
       populateVoiceChannels();
@@ -1043,28 +1055,57 @@ function renderDiscordModal() {
   }
 }
 
+// Which server the modal should show. A manual pick survives the 30s status
+// polling; otherwise prefer the server where the user is in a voice channel,
+// then the one the bot is connected to, then whatever was selected before.
+function pickPreferredGuildId(previousGuildId) {
+  const guilds = discordStatus.guilds || [];
+  const has = id => id && guilds.some(g => g.id === id);
+
+  if (guildPickedManually && has(previousGuildId)) return previousGuildId;
+
+  const userGuild = guilds.find(g => g.userChannelId);
+  if (userGuild) return userGuild.id;
+
+  const connectedGuild = guilds.find(g => g.connected);
+  if (connectedGuild) return connectedGuild.id;
+
+  if (has(previousGuildId)) return previousGuildId;
+  return guilds[0]?.id || null;
+}
+
 function populateVoiceChannels() {
   const guildId = document.getElementById('selectGuild').value;
   const guild = discordStatus.guilds.find(g => g.id === guildId);
   const channelSelect = document.getElementById('selectVoiceChannel');
+  const previousChannelId = channelSelect.value;
   channelSelect.innerHTML = '';
   if (guild) {
+    // A manual pick survives status polling; otherwise the user's own channel
+    // wins over the bot's current one
+    const keepPrevious = channelPickedManually && guild.voiceChannels.some(c => c.id === previousChannelId);
+    const selectedId = keepPrevious
+      ? previousChannelId
+      : guild.userChannelId || (guild.connected ? guild.channelId : null);
     guild.voiceChannels.forEach(ch => {
       const opt = document.createElement('option');
       opt.value = ch.id;
       opt.textContent = ch.userPresent ? `${ch.name} (você está aqui)` : ch.name;
-      if (guild.connected && guild.channelId === ch.id) {
-        opt.selected = true;
-      } else if (ch.userPresent) {
-        opt.selected = true;
-      }
+      if (ch.id === selectedId) opt.selected = true;
       channelSelect.appendChild(opt);
     });
   }
 }
 
 function initDiscordModal() {
-  document.getElementById('selectGuild').addEventListener('change', populateVoiceChannels);
+  document.getElementById('selectGuild').addEventListener('change', () => {
+    guildPickedManually = true;
+    channelPickedManually = false;
+    populateVoiceChannels();
+  });
+  document.getElementById('selectVoiceChannel').addEventListener('change', () => {
+    channelPickedManually = true;
+  });
 
   document.getElementById('btnJoinChannel').addEventListener('click', async () => {
     const guildId = document.getElementById('selectGuild').value;
